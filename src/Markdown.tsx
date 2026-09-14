@@ -1,11 +1,14 @@
 import { createElement, Fragment, memo, type CSSProperties, type ReactNode } from 'react';
 import MarkdownIt, { type Token } from 'markdown-it';
+import { installMarkdownSourceMap, sourceOffsets } from './markdownSourceMap';
+import { registerMarkdownSource } from './markdownCaret';
 
 const parser = new MarkdownIt({ html: false, linkify: true, breaks: true });
 parser.linkify.set({ fuzzyLink: true });
 // Keep labels for unsupported destinations. Rendering below is the only place
 // that creates links, and it permits only explicit web and email protocols.
 parser.validateLink = () => true;
+installMarkdownSourceMap(parser);
 
 function safeHref(value: string | number | null): string | undefined {
   if (typeof value !== 'string' || !value) return undefined;
@@ -29,8 +32,9 @@ function imageLabel(token: Token): string {
     : child.type === 'softbreak' || child.type === 'hardbreak' ? '\n' : child.content).join('') || 'Image';
 }
 
-function parseMarkdown(text: string, inline: boolean) {
-  return inline ? parser.parseInline(text, {}) : parser.parse(text, {});
+function parseMarkdown(text: string, inline: boolean, sourceMap = false) {
+  const env = { stowSourceMap: sourceMap };
+  return inline ? parser.parseInline(text, env) : parser.parse(text, env);
 }
 
 /** Visible text for current-note search, using exactly the renderer's parser. */
@@ -62,7 +66,12 @@ const containerTags = new Set([
   'em', 'strong', 's', 'table', 'thead', 'tbody', 'tr', 'th', 'td',
 ]);
 
-type MarkdownNode = string | { tag: string; attributes: Record<string, string>; children: MarkdownNode[] };
+type MarkdownNode = string | { tag: string; attributes: Record<string, string>; children: MarkdownNode[]; offsets?: readonly number[] };
+
+function tokenText(token: Token): MarkdownNode {
+  const offsets = sourceOffsets(token);
+  return offsets ? { tag: 'span', attributes: {}, children: [token.content], offsets } : token.content;
+}
 
 /** One allowlisted element tree for the interactive renderer and textual exports. */
 function markdownNodes(tokens: Token[]): MarkdownNode[] {
@@ -90,13 +99,13 @@ function markdownNodes(tokens: Token[]): MarkdownNode[] {
         continue;
       }
       switch (token.type) {
-        case 'text': children.push(token.content); break;
+        case 'text': children.push(tokenText(token)); break;
         case 'inline': children.push(...markdownNodes(token.children || [])); break;
         case 'softbreak':
         case 'hardbreak': element('br'); break;
-        case 'code_inline': element('code', [token.content]); break;
+        case 'code_inline': element('code', [tokenText(token)]); break;
         case 'code_block':
-        case 'fence': element('pre', [{ tag: 'code', attributes: {}, children: [token.content] }]); break;
+        case 'fence': element('pre', [{ tag: 'code', attributes: {}, children: [tokenText(token)] }]); break;
         case 'hr': element('hr'); break;
         case 'image': children.push(...link(token, [imageLabel(token)])); break;
         default: throw new Error(`Unsupported Markdown token: ${token.type}`);
@@ -114,6 +123,10 @@ function reactNodes(nodes: MarkdownNode[], interactive: boolean): ReactNode[] {
     if (node.tag === 'a' && !interactive) return createElement(Fragment, { key }, children);
     const { style, ...attributes } = node.attributes;
     const props: Record<string, unknown> = { key, ...attributes };
+    if (node.offsets) {
+      props['data-markdown-source'] = '';
+      props.ref = (element: HTMLElement | null) => { if (element) registerMarkdownSource(element, node.offsets!); };
+    }
     if (style) props.style = { textAlign: style.slice('text-align:'.length) } as CSSProperties;
     if (node.tag === 'a') {
       props.onClick = (event: React.MouseEvent) => event.stopPropagation();
@@ -163,11 +176,11 @@ export function markdownText(text: string, inline = false): string {
   return serialize(markdownNodes(parseMarkdown(text, inline))).replace(/\n+$/, '');
 }
 
-export type MarkdownProps = { text: string; inline?: boolean; className?: string; interactive?: boolean };
+export type MarkdownProps = { text: string; inline?: boolean; className?: string; interactive?: boolean; sourceMap?: boolean };
 
 /** Same parser for notes and checklist labels; labels bypass all block rules. */
-const Markdown = memo(function Markdown({ text, inline = false, className = '', interactive = true }: MarkdownProps) {
-  const tokens = parseMarkdown(text, inline);
+const Markdown = memo(function Markdown({ text, inline = false, className = '', interactive = true, sourceMap = false }: MarkdownProps) {
+  const tokens = parseMarkdown(text, inline, sourceMap);
   return createElement(inline ? 'span' : 'div', {
     className: `${inline ? 'markdown-inline' : 'markdown-body'} ${className}`.trim(),
   }, reactNodes(markdownNodes(tokens), interactive));

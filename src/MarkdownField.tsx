@@ -1,6 +1,7 @@
 import { useLayoutEffect, useRef, useState, type TextareaHTMLAttributes } from 'react';
 import AutoTextarea from './AutoTextarea';
 import Markdown from './Markdown';
+import { markdownCaretAtPoint } from './markdownCaret';
 
 type Props = Omit<TextareaHTMLAttributes<HTMLTextAreaElement>, 'value' | 'defaultValue'> & {
   value: string;
@@ -103,9 +104,19 @@ export default function MarkdownField({ value, inline = false, className = '', o
       if ((event.target as HTMLElement).closest('a')) return;
       // Mouse focus waits for the click; touch scrolling keeps its native gesture.
       if (!props.disabled && event.pointerType === 'mouse' && event.button === 0) event.preventDefault();
+    }} onMouseDown={event => {
+      // Touch taps also dispatch mousedown before focus. Defer that focus until
+      // click has measured the preview, without cancelling touch scrolling.
+      if (!(event.target as HTMLElement).closest('a') && !props.disabled && event.button === 0) event.preventDefault();
     }} onClick={event => {
-      if (!(event.target as HTMLElement).closest('a') && !props.disabled) setEditing(true);
+      if ((event.target as HTMLElement).closest('a') || props.disabled) return;
+      if (event.detail > 0) {
+        const offset = markdownCaretAtPoint(event.currentTarget, event.clientX, event.clientY) ?? value.length;
+        selection.current = { start: offset, end: offset, direction: 'none' };
+      }
+      event.preventDefault();
+      setEditing(true);
     }}>
-    {value ? <Markdown text={value} inline={inline} /> : <span className="markdown-placeholder">{props.placeholder}</span>}
+    {value ? <Markdown text={value} inline={inline} sourceMap={!props.disabled} /> : <span className="markdown-placeholder">{props.placeholder}</span>}
   </div>;
 }
