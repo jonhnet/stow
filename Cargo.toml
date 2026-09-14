@@ -1,0 +1,55 @@
+[package]
+name = "stow-server"
+version = "0.1.0"
+edition = "2024"
+license = "AGPL-3.0-or-later"
+rust-version = "1.94"
+
+[lib]
+path = "server-rust/lib.rs"
+
+[[bin]]
+name = "stow-server"
+path = "server-rust/main.rs"
+
+[[bin]]
+name = "stow-test-driver"
+path = "server-rust/test_driver.rs"
+required-features = ["test-support"]
+
+[features]
+test-support = ["dep:hyper", "dep:hyper-util", "dep:tempfile"]
+
+[dependencies]
+axum = { version = "0.8.9", features = ["ws"] }
+base64 = "0.22"
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
+futures-util = "0.3"
+hex = "0.4"
+hmac = "0.12"
+icu_properties = "2.3"
+rand = "0.8"
+percent-encoding = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+subtle = "2"
+thiserror = "2"
+tokio = { version = "1", features = ["full"] }
+tokio-util = { version = "0.7", features = ["rt"] }
+url = "2"
+yrs = { version = "=0.26.0", features = ["sync"] }
+
+hyper = { version = "1", features = ["client", "http1"], optional = true }
+hyper-util = { version = "0.1", features = ["tokio"], optional = true }
+tempfile = { version = "3", optional = true }
+
+[dev-dependencies]
+tempfile = "3"
+hyper = { version = "1", features = ["client", "http1"] }
+hyper-util = { version = "0.1", features = ["tokio"] }
+tokio-tungstenite = "0.29"
+
+[profile.release]
+lto = "thin"
+strip = true

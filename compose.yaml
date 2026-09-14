@@ -1,0 +1,21 @@
+name: stow
+
+services:
+  stow:
+    build: .
+    restart: unless-stopped
+    ports:
+      # Loopback by default: put an HTTPS reverse proxy in front for other devices.
+      - "${STOW_BIND_ADDRESS:-127.0.0.1}:${STOW_PORT:-3001}:3001"
+    environment:
+      # The server validates the credentials required by the selected mode.
+      STOW_AUTH_MODE: ${STOW_AUTH_MODE:-password}
+      STOW_PASSWORD: ${STOW_PASSWORD:-}
+      STOW_PROXY_SECRET: ${STOW_PROXY_SECRET:-}
+      # Set to your exact HTTPS URL behind a proxy, e.g. https://notes.example.com.
+      # This also enables Secure session cookies when TLS terminates at the proxy.
+      STOW_ORIGIN: ${STOW_ORIGIN:-}
+    volumes:
+      - stow-data:/data
+volumes:
+  stow-data:

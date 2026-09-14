@@ -1,0 +1,68 @@
+import * as Y from 'yjs';
+import type { PendingEdit } from './history-types';
+import type { PersistenceConnection } from './persistence-database';
+import { applyStoredUpdates } from './yjs-updates';
+import { enforcePermanentDeletions } from './deletion';
+import { redactPendingEdit } from './edit-draft';
+
+export interface PersistenceWrite {
+  batch: Uint8Array[];
+  forceCompact: boolean;
+  vector: Uint8Array;
+  edit?: { owner: string; draft: PendingEdit | null };
+  retired: string[];
+}
+export interface CompactionMetrics { totalMs: number; applyMs: number; encodeMs: number; inputBytes: number; outputBytes: number }
+export interface PersistenceWriteResult { correction?: Uint8Array; compaction?: CompactionMetrics }
+export interface PersistenceWriter {
+  write(db: PersistenceConnection, request: PersistenceWrite, compacting: () => void): Promise<PersistenceWriteResult>;
+  close(): void;
+}
+
+/** The worker owns this atomic append/replace transaction. Another tab's write
+ * occurs wholly before or after it; completion always means the commit finished. */
+export async function writePersistenceBatch(db: PersistenceConnection, request: PersistenceWrite, onCompacting: () => void = () => {}): Promise<PersistenceWriteResult> {
+  const { batch, retired, edit } = request;
+  const transaction = db.transaction(['updates', 'pendingEdits', 'maintenance'], 'readwrite');
+  const updatesStore = transaction.objectStore('updates'), editsStore = transaction.objectStore('pendingEdits'), maintenance = transaction.objectStore('maintenance');
+  const done = transaction.done; void done.catch(() => {});
+  const result: PersistenceWriteResult = {};
+  try {
+    await Promise.all(batch.map(update => updatesStore.add(update)));
+    if (edit) {
+      // Pending recovery contains source timestamps only. A stale writer cannot
+      // retain historical text; recovery rereads durable current-state deletions.
+      if (edit.draft) await editsStore.put(edit.draft, edit.owner);
+      else await editsStore.delete(edit.owner);
+    }
+    for (const owner of retired) await editsStore.delete(owner);
+    if (request.forceCompact || retired.length || await updatesStore.count() >= 500) {
+      onCompacting();
+      const start = performance.now(), updates = await updatesStore.getAll(), compacting = new Y.Doc();
+      try {
+        const applyStart = performance.now();
+        applyStoredUpdates(compacting, updates); enforcePermanentDeletions(compacting);
+        const applyMs = performance.now() - applyStart, deleted = compacting.getMap('deletedNotes');
+        const drafts = await editsStore.getAll(), owners = await editsStore.getAllKeys();
+        await Promise.all(drafts.map((saved, index) => {
+          const kept = redactPendingEdit(saved, deleted);
+          return kept ? editsStore.put(kept, owners[index]) : editsStore.delete(owners[index]);
+        }));
+        const encodeStart = performance.now(), compacted = Y.encodeStateAsUpdate(compacting);
+        result.correction = Y.encodeStateAsUpdate(compacting, request.vector);
+        const encodeMs = performance.now() - encodeStart;
+        await updatesStore.clear();
+        const tail = await updatesStore.add(compacted);
+        await maintenance.put(tail, 'validatedThrough');
+        result.compaction = { totalMs: performance.now() - start, applyMs, encodeMs,
+          inputBytes: updates.reduce((sum, value) => sum + value.byteLength, 0), outputBytes: compacted.byteLength };
+      } finally { compacting.destroy(); }
+    }
+    await done; return result;
+  } catch (error) {
+    try { transaction.abort(); } catch { /* Already aborted or complete. */ }
+    await done.catch(() => {}); throw error;
+  }
+}
+/** Explicit executor for process-local IndexedDB tests; browsers always use a worker. */
+export const inlinePersistenceWriter: PersistenceWriter = { write: writePersistenceBatch, close() {} };

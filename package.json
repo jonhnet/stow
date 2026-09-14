@@ -1,0 +1,48 @@
+{
+  "name": "stow",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "./scripts/run.sh dev",
+    "dev:lan": "./scripts/run.sh dev:lan",
+    "build": "./scripts/run.sh build",
+    "start": "./scripts/run.sh start",
+    "test": "./scripts/run.sh test",
+    "test:e2e": "./scripts/run.sh test:e2e",
+    "browsers:install": "./scripts/run.sh browsers:install",
+    "check": "./scripts/ci.sh"
+  },
+  "dependencies": {
+    "@mixmark-io/domino": "2.2.0",
+    "idb": "^8.0.3",
+    "lucide-react": "^0.468.0",
+    "markdown-it": "^15.0.1",
+    "react": "^19.1.0",
+    "react-dom": "^19.1.0",
+    "tar-stream": "^3.2.1",
+    "turndown": "^7.2.4",
+    "ws": "^8.18.3",
+    "yjs": "^13.6.27"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.55.0",
+    "@types/node": "^22.18.0",
+    "@types/react": "^19.1.12",
+    "@types/react-dom": "^19.1.9",
+    "@types/tar-stream": "^3.1.4",
+    "@types/turndown": "^5.0.6",
+    "@types/ws": "^8.18.1",
+    "@vitejs/plugin-react": "^4.7.0",
+    "concurrently": "^9.2.1",
+    "fake-indexeddb": "^6.2.5",
+    "tsx": "^4.20.5",
+    "typescript": "^5.9.2",
+    "vite": "^6.3.5",
+    "sharp": "^0.35.4"
+  },
+  "license": "AGPL-3.0-or-later",
+  "engines": {
+    "node": ">=22"
+  }
+}

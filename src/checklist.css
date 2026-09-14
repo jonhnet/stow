@@ -1,0 +1,53 @@
+.editor-checklist .editor-check-row {
+  gap: 5px;
+}
+
+.editor-checklist .editor-check-row.is-child { margin-inline-start: 24px; }
+
+.editor-checklist .item-drag-handle {
+  width: 14px;
+}
+
+.editor-checklist .item-drag-handle svg {
+  width: 14px;
+}
+
+.editor-checklist .item-text {
+  width: auto;
+  padding: 5px 0;
+  line-height: 1.5;
+  font-size: 15px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  overflow: hidden;
+}
+
+.editor-checklist > .new-item {
+  padding-left: 19px;
+}
+
+.editor-checklist .editor-check-row.insert-before::before,
+.editor-checklist .editor-check-row.insert-after::after {
+  left: calc(19px + var(--drop-offset, 0px));
+}
+
+.check-drag-preview>div { min-width: 0; }
+.check-drag-preview>div>span { display: block; }
+.check-drag-preview small { display: block; font-size: 11px; color: #747064; margin-top: 3px; }
+.check-drag-preview.nested-drop { border-inline-start: 4px solid #947522; }
+
+.card-checklist .check-row > span {
+  flex: 1;
+  white-space: pre-wrap;
+}
+
+@media (max-width: 620px) {
+  .editor-checklist .item-text { font-size: 16px; }
+}
+
+@media (hover: none), (pointer: coarse) {
+  .editor-checklist .item-drag-handle { width: 16px; }
+  .editor-checklist > .new-item { padding-left: 21px; }
+  .editor-checklist .editor-check-row.insert-before::before,
+  .editor-checklist .editor-check-row.insert-after::after { left: calc(21px + var(--drop-offset, 0px)); }
+}

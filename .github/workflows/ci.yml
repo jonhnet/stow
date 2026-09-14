@@ -1,0 +1,52 @@
+name: Build and test
+on: [push, pull_request]
+permissions:
+  contents: read
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  check:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    defaults:
+      run:
+        working-directory: stow-git
+        shell: bash
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          path: stow-git
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: '22'
+          package-manager-cache: false
+      - name: Install native dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential pkg-config imagemagick
+      - name: Scan for secrets
+        run: |
+          mkdir -p ../build/tools
+          curl --fail --location --retry 3 https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/gitleaks_8.30.1_linux_x64.tar.gz -o ../build/tools/gitleaks.tar.gz
+          echo '551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb  ../build/tools/gitleaks.tar.gz' | sha256sum --check
+          tar -xzf ../build/tools/gitleaks.tar.gz -C ../build/tools gitleaks
+          GITLEAKS_BIN="$PWD/../build/tools/gitleaks" ./scripts/check-secrets.sh
+      - name: Install locked dependencies and browser
+        run: |
+          ./setup.sh
+          npm run browsers:install -- --with-deps
+      - name: Build and test
+        run: npm run check
+      - name: Upload failed check diagnostics
+        if: failure()
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: check-diagnostics
+          path: |
+            build/logs
+            build/test-results
+            build/playwright-report
+          retention-days: 7
