@@ -226,7 +226,17 @@ function NoteEditor({ note: savedNote, initial, onCreated, labels, onClose: clos
           {note.kind === 'text' && <IconButton label="Add checklist" onClick={() => { focusNewItem.current = true; store.vault.setNoteMeta(ensureNote(), { kind: 'checklist' }); }}><CheckSquare size={18} /></IconButton>}
           <IconButton label={note.archived ? 'Unarchive note' : 'Archive note'} disabled={!savedNote} onClick={() => { store.vault.setNoteMeta(note.id, { archived: !note.archived }); onClose(); }}>{note.archived ? <ArchiveRestore size={18} /> : <Archive size={18} />}</IconButton>
         </>}
-        <div className="menu-anchor" ref={menuRef}><IconButton label="More note actions" aria-expanded={menu} onClick={() => { setMenu(!menu); setPalette(false); }}><MoreVertical size={18} /></IconButton>{menu && <div className="popup-menu editor-menu"><button disabled={!savedNote} onClick={() => { setMenu(false); setHistory(true); }}><History size={17} />Version history</button><HistoryMenu onAction={onUndoRedo} onClose={() => setMenu(false)} />{!note.trashed && <><button disabled={!savedNote} onClick={() => { store.vault.setNoteMeta(note.id, { trashed: true }); onClose(); }}><Trash2 size={17} />Move to trash</button></>}</div>}</div>
+        <div className="menu-anchor" ref={menuRef}><IconButton label="More note actions" aria-expanded={menu} onClick={() => { setMenu(!menu); setPalette(false); }}><MoreVertical size={18} /></IconButton>{menu && <div className="popup-menu editor-menu">
+          <button disabled={!savedNote} onClick={() => { setMenu(false); setHistory(true); }}><History size={17} />Version history</button>
+          <HistoryMenu onAction={onUndoRedo} onClose={() => setMenu(false)} />
+          {!note.trashed && <>
+            <button disabled={!note.body.trim()} onClick={() => {
+              store.vault.convertBodyToChecklist(note.id); setMenu(false);
+              menuRef.current?.querySelector<HTMLButtonElement>('button')?.focus({ preventScroll: true });
+            }}><CheckSquare size={17} />Convert to checklist</button>
+            <button disabled={!savedNote} onClick={() => { store.vault.setNoteMeta(note.id, { trashed: true }); onClose(); }}><Trash2 size={17} />Move to trash</button>
+          </>}
+        </div>}</div>
       </div>
       </>}
     </div>

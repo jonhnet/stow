@@ -570,6 +570,30 @@ export class Vault {
     order.forEach((itemId, position) => this.positionItem(itemId, parentId, (position + 1) * 1024));
     return true;
   }
+  /** Move body lines ahead of the existing checklist as one undoable edit. */
+  convertBodyToChecklist(id: string): boolean {
+    const note = this.getNote(id); if (!note || note.trashed) return false;
+    const lines = note.body.split(/\r\n|\r|\n/).filter(line => line.trim().length > 0);
+    if (!lines.length) return false;
+    const prepared = this.prepareLegacyText(note.id);
+    const description = `Note: converted text to ${lines.length} checklist item${lines.length === 1 ? '' : 's'}`;
+    this.change(note.sourceIds, { type: 'metadata', noteId: note.id }, description, () => {
+      if (prepared) this.saveRecipe(prepared);
+      this.prepareChecklist(note.id);
+      const roots = checklistGroups(this.getItems(note.id)).map(group => group.root);
+      const firstRank = roots[0]?.rank;
+      let ranks = lines.map((_, index) => firstRank === undefined ? (index + 1) * 1024 : firstRank - (lines.length - index) * 1024);
+      // Re-space roots only if floating-point precision leaves no room before them.
+      if (!ranks.every((rank, index) => Number.isFinite(rank) && (index === 0 || rank > ranks[index - 1]) && (firstRank === undefined || rank < firstRank))) {
+        ranks = lines.map((_, index) => (index + 1) * 1024);
+        roots.forEach((root, index) => this.positionItem(root.id, root.parentId, (lines.length + index + 1) * 1024));
+      }
+      lines.forEach((line, index) => this.insertItem(uid(), note.id, line, ranks[index]));
+      // Use the composed text path so conversion also clears a merged note's body.
+      this.setNoteText(note.id, 'body', '');
+    });
+    return true;
+  }
   addItem(noteId: string, text = '', parentId?: string): string {
     const id = uid(); if (!this.notes.has(noteId)) return id;
     const groups = checklistGroups(this.getItems(noteId)), parent = parentId ? groups.find(group => group.root.id === parentId) : undefined;
