@@ -18,7 +18,7 @@ npm run check
 
 For a narrower check, use `npm test`, `npm run build`, or `npm run test:e2e`. Browser tests serve the production bundle, so build first. Set `CHROME_PATH` to select another Chrome executable; otherwise the suite uses installed Chrome when available or Playwright Chromium. Performance runners use `CHROME_PATH` or Playwright Chromium.
 
-For local development, run `npm run dev` and open `http://localhost:5173`. `run-dev.sh` reads an optional sibling `.env` and requires the selected authentication credential. It binds Vite to loopback by default; setting `STOW_ORIGIN` selects network development behind that HTTPS origin. `VITE_STOW_DEVELOPMENT=true npm run build` adds the development warning to an intentionally non-authoritative production bundle. Vite development builds always show the warning.
+For local development, run `npm run dev` and open `http://localhost:5173`. See [developer information](docs/DEVELOPER_INFO.md) for workspace layout, environment variables, HTTPS development, and production builds, or [Podman](docs/PODMAN.md) for the container build.
 
 Backend tests live in `server-rust/tests/` and beside the native fixture, lab, cache, and transport modules. Client interoperability tests send real Yjs updates to the Rust service. Browser journeys cover editing, history, account isolation, offline recovery, and installation. Add a behavioral regression when a change exposes a gap in these checks.
 
