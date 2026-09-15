@@ -52,6 +52,7 @@ self.addEventListener('fetch', event => {
       `${defaultDataDir.replaceAll('\\', '/')}/**`, `${dataDir.replaceAll('\\', '/')}/**`],
   },
   proxy: {
-  '/api': 'http://127.0.0.1:3001',
+  // Keep Host aligned with the browser's Origin for the server's same-origin check.
+  '/api': { target: 'http://127.0.0.1:3001', changeOrigin: false },
   '/sync': { target: 'ws://127.0.0.1:3001', ws: true }
 } } });
