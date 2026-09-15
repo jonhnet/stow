@@ -216,6 +216,8 @@ def install(args):
             raise ValueError('Password already configured. To change it, edit the existing stow.env and restart the app service.')
         if not (state / 'stow.env').is_file():
             raise ValueError('Existing password configuration is missing; restore it from your backup.')
+        if previous['installed'] and not (state / 'notes/session-secret').is_file():
+            raise ValueError('The existing server identity is missing; restore the complete notes directory from your backup.')
         if previous['installed'] and not all((state / 'tls/caddy/pki/authorities/local' / leaf).is_file() for leaf in ['root.crt', 'root.key']):
             raise ValueError('The existing certificate authority is missing; restore its files instead of replacing device trust.')
         password = None

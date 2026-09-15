@@ -165,6 +165,15 @@ class HomeSetup(unittest.TestCase):
             self.invoke(fail_build=True)
         self.assertEqual(before, {p.name: p.read_text() for p in self.unit_dir.iterdir()})
 
+    def test_missing_server_identity_cannot_silently_create_a_different_vault(self):
+        self.existing()
+        (self.state / 'notes/session-secret').unlink()
+        before = {p.name: p.read_text() for p in self.unit_dir.iterdir()}
+        with self.assertRaisesRegex(ValueError, 'server identity is missing'):
+            self.invoke()
+        self.assertEqual(before, {p.name: p.read_text() for p in self.unit_dir.iterdir()})
+        self.assertFalse((self.state / 'notes/session-secret').exists())
+
     def test_failed_activation_restores_both_previous_images_without_touching_data(self):
         self.existing()
         before = {p.name: p.read_text() for p in self.unit_dir.iterdir()}
