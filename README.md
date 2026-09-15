@@ -30,11 +30,13 @@ Browsers require HTTPS for Stow's offline support and security APIs, even on you
 
 ## Self-host an internet-facing production server
 
-Proposed workflow: run the Podman setup on a Linux server, enter your domain name and Stow password, and point the domain at the server. With ports 80 and 443 reachable, [Caddy obtains and renews the HTTPS certificate](https://caddyserver.com/docs/automatic-https). If you already have an HTTPS reverse proxy, use it to forward Stow's HTTP and WebSocket traffic instead.
+Use your existing nginx HTTPS proxy. The Stow application container serves HTTP; the home setup supplies HTTPS through a separate Caddy container.
 
-Open your HTTPS URL from any device, sign in, and optionally install the PWA. No per-device certificate installation is needed. Your server stores the notes, and your devices can sync wherever they have internet access.
+1. Deploy Stow with Podman, persistent storage, and a Stow password. Set `STOW_ORIGIN=https://stow.example.com`. Make its HTTP endpoint available to nginx: for example, `127.0.0.1:3001` on the same host, or a private address restricted to the proxy if nginx runs elsewhere.
+2. Point `stow.example.com` at nginx and add a site that forwards requests to Stow's HTTP endpoint. Preserve the original `Host` header and enable [WebSocket forwarding](https://nginx.org/en/docs/http/websocket.html) for synchronization. Configure a valid HTTPS certificate and automatic renewal, for example with [Certbot](https://certbot.eff.org/instructions?ws=nginx&os=snap).
+3. Open `https://stow.example.com`, sign in, and optionally install the PWA. Devices can sync wherever they have internet access; no per-device certificate installation is needed.
 
-The internet-facing setup is still proposed. For now, use the [Podman guide](docs/PODMAN.md) with an existing HTTPS proxy.
+The [Podman guide](docs/PODMAN.md) has manual container commands for a proxy on the same host. An installer mode that manages this deployment's boot services and updates is still proposed.
 
 ## Back up and restore
 
