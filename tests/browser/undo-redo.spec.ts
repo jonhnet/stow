@@ -1,4 +1,5 @@
 import { test, expect, type Locator, type Page } from '@playwright/test';
+import type { HistoryExport } from '../../src/core/server-history-types';
 
 const ORIGIN = 'http://localhost:4174';
 const card = (page: Page, title: string) => page.getByRole('article', { name: `Open note: ${title}`, exact: true });
@@ -163,6 +164,16 @@ test('history exposes title, body and item edits and global label colors as nonr
   await body.focus(); await body.fill('Copper paragraph');
   await editor(page).getByRole('button', { name: 'Add checklist', exact: true }).click();
   await editor(page).getByRole('textbox', { name: 'New list item', exact: true }).fill('Mango task');
+  // Establish the saved starting version before testing its change description.
+  // Best-effort history hints can otherwise observe the next edit already applied.
+  await expect.poll(async () => {
+    const session = await (await page.request.get(`${ORIGIN}/api/session`)).json();
+    const response = await page.request.get(`${ORIGIN}/api/history/export`, { headers: { 'X-Stow-Vault': session.vaultId } });
+    expect(response.ok()).toBe(true);
+    const history: HistoryExport = await response.json();
+    return history.versions.some(version => Object.values(version.state.sources)
+      .some(source => Object.values(source.items).some(item => item.text === 'Mango task')));
+  }).toBe(true);
   const item = editor(page).getByRole('textbox', { name: 'List item text', exact: true });
   await item.focus(); await item.fill('Papaya task');
   await editor(page).getByRole('button', { name: 'Close', exact: true }).click();
