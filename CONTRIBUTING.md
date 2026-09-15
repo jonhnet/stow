@@ -18,6 +18,8 @@ npm run check
 
 For a narrower check, use `npm test`, `npm run build`, or `npm run test:e2e`. Browser tests serve the production bundle, so build first. Set `CHROME_PATH` to select another Chrome executable; otherwise the suite uses installed Chrome when available or Playwright Chromium. Performance runners use `CHROME_PATH` or Playwright Chromium.
 
+Home installer regression tests run with `python3 -B -m unittest discover -s tests/hosting`. A separate CI job runs `sudo python3 -B tests/hosting/smoke.py` on a systemd host with Podman and the locked Node dependencies installed. It creates and removes a disposable installation, tests Chromium with real CA trust, and verifies offline edits survive an update. Logs stay in `../build/logs/home-hosting`.
+
 For local development, run `npm run dev` and open `http://localhost:5173`. See [developer information](docs/DEVELOPER_INFO.md) for workspace layout, environment variables, HTTPS development, and production builds, or [Podman](docs/PODMAN.md) for the container build.
 
 Backend tests live in `server-rust/tests/` and beside the native fixture, lab, cache, and transport modules. Client interoperability tests send real Yjs updates to the Rust service. Browser journeys cover editing, history, account isolation, offline recovery, and installation. Add a behavioral regression when a change exposes a gap in these checks.

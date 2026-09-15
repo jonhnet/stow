@@ -2,6 +2,8 @@
 
 The repository includes a [Containerfile](../Containerfile) for building the native server and browser assets. These instructions build from source and run Stow behind an existing HTTPS proxy. They do not install that proxy or configure a service to start at boot.
 
+For a home server without a domain name, the [home setup](HOME_HOSTING.md) handles HTTPS, device certificates, and boot services.
+
 ## Build
 
 With Podman installed, run from the source checkout:

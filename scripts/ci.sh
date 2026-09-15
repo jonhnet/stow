@@ -16,6 +16,7 @@ check() {
   fi
 }
 check format cargo fmt --all -- --check
+check hosting python3 -B -m unittest discover -s tests/hosting -p 'test_*.py'
 check clippy cargo clippy --locked --all-targets --all-features -- -D warnings
 check tests npm test
 check build npm run build

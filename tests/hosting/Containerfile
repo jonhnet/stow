@@ -1,0 +1,6 @@
+FROM docker.io/library/node:22-bookworm-slim
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends chromium libnss3-tools ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+COPY tests/hosting/browser.mjs /test.mjs
+CMD ["node", "/test.mjs"]

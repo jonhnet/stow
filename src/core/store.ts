@@ -355,7 +355,12 @@ class StowStore {
         return;
       }
       rememberAccount(account);
-      if (!this.account) await this.openAccount(account);
+      if (!this.account) {
+        // The session is now verified, including after the password form unlocks
+        // a fresh browser. Account stores must initialize outside the locked state.
+        this.access = 'opening';
+        await this.openAccount(account);
+      }
       if (this.parked || this.access !== 'ready' || this.socket?.readyState === WebSocket.OPEN || this.socket?.readyState === WebSocket.CONNECTING) return;
       this.status = 'connecting';
       this.refresh();

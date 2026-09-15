@@ -24,7 +24,7 @@ Open http://localhost:5173. See [developer information](docs/DEVELOPER_INFO.md) 
 
 ## Self-host a production server inside your house
 
-Proposed workflow: run the supplied Podman setup on an always-on Linux computer at home, reserve its local IP address in your router, and choose a Stow password. You need no domain name, port forwarding, or cloud account.
+Run the [home setup](docs/HOME_HOSTING.md) on an always-on Linux computer with Podman and systemd. Reserve its local IP address in your router, then run `sudo ./self-host.py --address 192.168.1.20` from the checkout, substituting your server's address. Choose a Stow password when prompted. You need no domain name, port forwarding, or cloud account.
 
 Browsers require HTTPS for Stow's offline support and security APIs, even on your home network, so this setup uses a locally trusted certificate. The setup gives you a local HTTPS address and a [local CA certificate](https://caddyserver.com/docs/automatic-https#local-https). Install that certificate once on each phone or computer, then open Stow, sign in, and optionally install the PWA. Notes sync over your home network. Away from home, you can edit cached notes; they sync when you return.
 
@@ -34,9 +34,11 @@ Proposed workflow: run the Podman setup on a Linux server, enter your domain nam
 
 Open your HTTPS URL from any device, sign in, and optionally install the PWA. No per-device certificate installation is needed. Your server stores the notes, and your devices can sync wherever they have internet access.
 
-Until these setup workflows are implemented, use the [Podman guide](docs/PODMAN.md) with an existing HTTPS proxy.
+The internet-facing setup is still proposed. For now, use the [Podman guide](docs/PODMAN.md) with an existing HTTPS proxy.
 
 ## Back up and restore
+
+For the home setup, follow its [backup and restore commands](docs/HOME_HOSTING.md#back-up-and-restore), which also preserve the password and local certificate authority.
 
 Back up the **complete data directory**, including `session-secret`, `vault-incarnations.json` if an [account reset](docs/account-reset.md) has been performed, and each vault's `vault.yjs`, `updates/`, `blobs/`, `blob-cleanup.json`, `history/`, and `history-retention.json` under `users/` (or the data directory itself in password mode). A snapshot alone can omit newer edits stored in `updates/`. Include any retained original files too. The server secret and account reset registry determine current user vault IDs, so preserve them. Stop the service first so snapshots, update logs, and blobs are copied together consistently. For the container described in the [Podman guide](docs/PODMAN.md), run `podman stop stow` before copying its volume and `podman start stow` afterward.
 
