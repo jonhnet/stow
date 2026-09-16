@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Install or update a password-protected Stow service on a home Linux server."""
+"""Install or update Stow with local HTTPS or behind an existing HTTPS proxy."""
 import argparse
 from contextlib import contextmanager
 import fcntl
@@ -17,6 +17,7 @@ import sys
 import tempfile
 import time
 import urllib.request
+from urllib.parse import urlsplit
 
 SOURCE = Path(__file__).resolve().parent
 UNIT_DIR = Path('/etc/containers/systemd')
@@ -42,12 +43,12 @@ def run(*args, capture=False, **kwargs):
     return result.stdout.strip() if capture else None
 
 
-def validate(address, port, name, state):
+def validate(address, port, name, state, *, proxy=False):
     ip = ipaddress.IPv4Address(address)
-    if not any(ip in network for network in PRIVATE_NETWORKS):
+    if not (proxy and ip.is_loopback) and not any(ip in network for network in PRIVATE_NETWORKS):
         raise ValueError('Use the server’s private LAN IPv4 address (10.x, 172.16–31.x, or 192.168.x).')
     if not 1024 <= port <= 65535:
-        raise ValueError('HTTPS port must be between 1024 and 65535.')
+        raise ValueError('Port must be between 1024 and 65535.')
     if not re.fullmatch(r'[a-z][a-z0-9-]{0,39}', name):
         raise ValueError('Service name must use lowercase letters, digits, and hyphens; start with a letter.')
     if not state.is_absolute() or not re.fullmatch(r'/[A-Za-z0-9_./-]+', str(state)):
@@ -67,7 +68,43 @@ def password_value(value):
 
 
 def origin(settings):
+    if settings.get('mode') == 'proxy':
+        return settings['url']
     return f'https://{settings["address"]}:{settings["port"]}'
+
+
+def public_url(value):
+    if any(char.isspace() or ord(char) < 32 for char in value):
+        raise ValueError('Use a public HTTPS URL without spaces or control characters.')
+    parsed = urlsplit(value)
+    label = r'[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?'
+    if (parsed.scheme != 'https' or parsed.username is not None or parsed.password is not None
+            or parsed.path not in ['', '/'] or '?' in value or '#' in value
+            or not parsed.hostname or len(parsed.hostname) > 253
+            or not re.fullmatch(label + r'(?:\.' + label + r')+', parsed.hostname)
+            or parsed.hostname.rsplit('.', 1)[1].isdigit()
+            or parsed.netloc.endswith(':')):
+        raise ValueError('Use an HTTPS domain URL such as https://stow.example.com, without a path, credentials, query, or fragment.')
+    port = parsed.port
+    if port is not None and not 1 <= port <= 65535:
+        raise ValueError('Invalid public HTTPS port.')
+    return 'https://' + parsed.hostname.lower() + (f':{port}' if port and port != 443 else '')
+
+
+def backend_url(settings):
+    return f'http://{settings["address"]}:{settings["port"]}'
+
+
+def nginx_location(settings):
+    template = (SOURCE / 'deploy/nginx-location.conf').read_text()
+    return template.replace('http://127.0.0.1:3001', backend_url(settings))
+
+
+def service_names(settings):
+    names = [settings['name'] + '-app.service']
+    if settings.get('mode', 'home') == 'home':
+        names.append(settings['name'] + '-https.service')
+    return names
 
 
 def atomic_write(path, content, mode=0o600):
@@ -103,10 +140,10 @@ https://{settings['address']} {{
 
 def units(settings, state, image, caddy_image=CADDY_IMAGE):
     name = settings['name']
+    proxy = settings.get('mode') == 'proxy'
     marker = f'# Managed by Stow self-host.py; state={state}\n'
     common = '\n[Service]\nRestart=on-failure\nRestartSec=5\nTimeoutStartSec=120\n\n[Install]\nWantedBy=multi-user.target\n'
-    return {
-        f'{name}.network': marker + f'[Network]\nNetworkName={name}\n',
+    rendered = {
         f'{name}-app.container': marker + f'''[Unit]
 Description=Stow notes
 Wants=network-online.target
@@ -115,7 +152,8 @@ After=network-online.target
 [Container]
 Image={image}
 ContainerName={name}-app
-Network={name}.network
+Network={'bridge' if proxy else name + '.network'}
+{f'PublishPort={settings["address"]}:{settings["port"]}:3001/tcp' if proxy else ''}
 EnvironmentFile={state}/stow.env
 Volume={state}/notes:/data:Z
 HealthCmd=curl --fail --silent http://127.0.0.1:3001/api/health
@@ -123,7 +161,11 @@ HealthInterval=30s
 HealthTimeout=3s
 HealthStartPeriod=10s
 ''' + common,
-        f'{name}-https.container': marker + f'''[Unit]
+    }
+    if proxy:
+        return rendered
+    rendered[f'{name}.network'] = marker + f'[Network]\nNetworkName={name}\n'
+    rendered[f'{name}-https.container'] = marker + f'''[Unit]
 Description=Stow home HTTPS
 Wants={name}-app.service
 After={name}-app.service
@@ -136,8 +178,8 @@ PublishPort={settings['address']}:{settings['port']}:443/tcp
 Volume={state}/Caddyfile:/etc/caddy/Caddyfile:ro,Z
 Volume={state}/tls:/data:Z
 Volume={state}/caddy-config:/config:Z
-''' + common,
-    }
+''' + common
+    return rendered
 
 
 def quadlet_generator():
@@ -160,36 +202,38 @@ def verify_units(rendered):
                 raise ValueError(f'Podman could not generate {service}; check the installed Quadlet version.')
 
 
-def preflight(address):
+def preflight(address, port=0):
     if os.geteuid() != 0:
         raise ValueError('Run this command with sudo; it installs system services and persistent state.')
     with socket.socket() as probe:
-        probe.bind((address, 0))
+        probe.bind((address, port))
     quadlet_generator()
     if not Path('/run/systemd/system').is_dir():
         raise ValueError('This setup requires a running systemd system manager.')
 
 
 def ready(settings, state, timeout=60):
-    ca = state / 'tls/caddy/pki/authorities/local/root.crt'
+    proxy = settings.get('mode') == 'proxy'
+    ca = None if proxy else state / 'tls/caddy/pki/authorities/local/root.crt'
+    endpoint = backend_url(settings) if proxy else origin(settings)
     deadline = time.monotonic() + timeout
     last_error = None
     while time.monotonic() < deadline:
         try:
-            context = ssl.create_default_context(cafile=str(ca))
+            context = ssl.create_default_context(cafile=str(ca)) if ca else None
             # A LAN address must be reached directly, even when the shell has a proxy configured.
             opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), urllib.request.HTTPSHandler(context=context))
-            with opener.open(origin(settings) + '/api/health', timeout=3) as response:
+            with opener.open(endpoint + '/api/health', timeout=3) as response:
                 if json.load(response).get('ok') is not True:
                     raise ValueError('Unexpected health response')
-            with opener.open(origin(settings), timeout=3) as response:
+            with opener.open(endpoint, timeout=3) as response:
                 if '<title>Stow</title>' not in response.read().decode():
                     raise ValueError('Browser assets are missing')
             return ca
         except (OSError, ValueError) as error:
             last_error = error
             time.sleep(0.25)
-    raise ValueError(f'HTTPS did not become ready at {origin(settings)}: {last_error}. Check sudo journalctl -u {settings["name"]}-app -u {settings["name"]}-https.')
+    raise ValueError(f'Stow did not become ready at {endpoint}: {last_error}. Check sudo journalctl -u {settings["name"]}-app.')
 
 
 def install(args):
@@ -200,17 +244,26 @@ def install(args):
         raise ValueError('This state directory belongs to a different installation.')
     if not previous and state.exists() and any(state.iterdir()):
         raise ValueError('Choose an empty state directory; existing files will not be adopted or overwritten.')
+    mode = 'proxy' if args.behind_proxy is not None else (previous or {}).get('mode', 'home')
+    if previous and mode != previous.get('mode', 'home'):
+        raise ValueError('This installation uses a different hosting mode. Use a separate name and state directory for a new installation.')
+    url = public_url(args.behind_proxy if args.behind_proxy is not None else previous['url']) if mode == 'proxy' else None
     address = args.address or (previous and previous['address'])
+    if not address and mode == 'proxy':
+        address = '127.0.0.1'
     if not address:
         if not sys.stdin.isatty():
             raise ValueError('Supply --address with the server’s reserved LAN IPv4 address.')
         address = input('Reserved LAN IPv4 address: ').strip()
-    port = args.port if args.port is not None else (previous and previous['port']) or 8443
-    address = validate(address, port, args.name, state)
-    if previous and (address != previous['address'] or port != previous['port']):
+    port = args.port if args.port is not None else (previous and previous['port']) or (3001 if mode == 'proxy' else 8443)
+    address = validate(address, port, args.name, state, proxy=mode == 'proxy')
+    settings = {**(previous or {}), 'schema': 1, 'name': args.name, 'address': address, 'port': port,
+                'mode': mode, 'installed': bool(previous and previous['installed'])}
+    if url:
+        settings['url'] = url
+    if previous and origin(settings) != origin(previous):
         raise ValueError('Keep the existing address and port: changing origin creates a different browser vault cache.')
-    settings = previous or {'schema': 1, 'name': args.name, 'address': address, 'port': port, 'installed': False}
-    preflight(address)
+    preflight(address, port if not previous else 0)
     if previous:
         if args.password_file:
             raise ValueError('Password already configured. To change it, edit the existing stow.env and restart the app service.')
@@ -218,7 +271,7 @@ def install(args):
             raise ValueError('Existing password configuration is missing; restore it from your backup.')
         if previous['installed'] and not (state / 'notes/session-secret').is_file():
             raise ValueError('The existing server identity is missing; restore the complete notes directory from your backup.')
-        if previous['installed'] and not all((state / 'tls/caddy/pki/authorities/local' / leaf).is_file() for leaf in ['root.crt', 'root.key']):
+        if mode == 'home' and previous['installed'] and not all((state / 'tls/caddy/pki/authorities/local' / leaf).is_file() for leaf in ['root.crt', 'root.key']):
             raise ValueError('The existing certificate authority is missing; restore its files instead of replacing device trust.')
         password = None
     elif args.password_file:
@@ -236,20 +289,24 @@ def install(args):
         if target.exists() and (target.is_symlink() or not target.read_text().startswith(content.splitlines()[0] + '\n')):
             raise ValueError(f'Refusing to replace an unrelated service definition: {target}')
     verify_units(rendered)
-    print('Building Stow and fetching Caddy; the existing service keeps running during the build.', flush=True)
+    print('Building Stow; the existing service keeps running during the build.', flush=True)
     build = ['podman', 'build', '--format', 'oci', '--tag', 'localhost/stow:' + args.name, '--file', 'Containerfile']
     if args.build_network:
         build += ['--network', args.build_network]
     run(*build, '.', cwd=SOURCE)
     image = run('podman', 'image', 'inspect', 'localhost/stow:' + args.name, '--format', '{{.Id}}', capture=True)
-    run('podman', 'pull', CADDY_IMAGE)
-    caddy_image = run('podman', 'image', 'inspect', CADDY_IMAGE, '--format', '{{.Id}}', capture=True)
+    caddy_image = CADDY_IMAGE
+    if mode == 'home':
+        run('podman', 'pull', CADDY_IMAGE)
+        caddy_image = run('podman', 'image', 'inspect', CADDY_IMAGE, '--format', '{{.Id}}', capture=True)
     rendered = units(settings, state, image, caddy_image)
     saved_units = {filename: (UNIT_DIR / filename).read_text() if (UNIT_DIR / filename).exists() else None for filename in rendered}
-    saved_config = {filename: (state / filename).read_text() if (state / filename).exists() else None for filename in ['Caddyfile', 'settings.json']}
+    config_name = 'nginx-location.conf' if mode == 'proxy' else 'Caddyfile'
+    config = nginx_location(settings) if mode == 'proxy' else caddyfile(settings)
+    saved_config = {filename: (state / filename).read_text() if (state / filename).exists() else None for filename in [config_name, 'settings.json']}
     state.mkdir(parents=True, exist_ok=True, mode=0o700)
     state.chmod(0o700)
-    for directory in ['notes', 'tls', 'caddy-config']:
+    for directory in ['notes'] + (['tls', 'caddy-config'] if mode == 'home' else []):
         target = state / directory
         if target.is_symlink():
             raise ValueError(f'Refusing a symlink for persistent state: {target}')
@@ -259,14 +316,14 @@ def install(args):
                 os.chown(target, 1000, 1000)
     if password is not None:
         atomic_write(state / 'stow.env', f'STOW_AUTH_MODE=password\nSTOW_PASSWORD={password}\nSTOW_ORIGIN={origin(settings)}\n')
-    atomic_write(state / 'Caddyfile', caddyfile(settings))
+    atomic_write(state / config_name, config)
     atomic_write(settings_path, json.dumps(settings, indent=2) + '\n')
     UNIT_DIR.mkdir(parents=True, exist_ok=True)
     try:
         for filename, content in rendered.items():
             atomic_write(UNIT_DIR / filename, content, 0o644)
         run('systemctl', 'daemon-reload')
-        run('systemctl', 'restart', args.name + '-app.service', args.name + '-https.service')
+        run('systemctl', 'restart', *service_names(settings))
         ca = ready(settings, state)
     except (OSError, ValueError, subprocess.CalledProcessError):
         if previous and previous['installed'] and all(content is not None for content in saved_units.values()):
@@ -277,10 +334,13 @@ def install(args):
                 if content is not None:
                     atomic_write(state / filename, content)
             run('systemctl', 'daemon-reload')
-            run('systemctl', 'restart', args.name + '-app.service', args.name + '-https.service')
+            run('systemctl', 'restart', *service_names(previous))
         raise
     settings['installed'] = True
     atomic_write(settings_path, json.dumps(settings, indent=2) + '\n')
+    if mode == 'proxy':
+        print(f'\nStow HTTP backend is ready: {backend_url(settings)}\nPublic URL: {origin(settings)}\nnginx location block: {state}/nginx-location.conf\nPoint your HTTPS proxy at that backend. See docs/INTERNET_HOSTING.md.')
+        return
     atomic_write(state / 'stow-ca.crt', ca.read_text(), 0o644)
     digest = hashlib.sha256(ssl.PEM_cert_to_DER_cert(ca.read_text())).hexdigest().upper()
     print(f'\nStow is ready: {origin(settings)}\nPublic CA certificate: {state}/stow-ca.crt\nCA SHA-256: {":".join(digest[i:i + 2] for i in range(0, len(digest), 2))}\nInstall that CA certificate on each device before opening Stow. See docs/HOME_HOSTING.md.')
@@ -288,8 +348,9 @@ def install(args):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--address', help='Reserved private LAN IPv4 address of this server; prompted on first install.')
-    parser.add_argument('--port', type=int, help='HTTPS port; defaults to 8443 on first install.')
+    parser.add_argument('--behind-proxy', metavar='HTTPS_URL', help='Use an existing HTTPS proxy for this public URL; Stow serves HTTP.')
+    parser.add_argument('--address', help='Local bind IPv4 address; defaults to 127.0.0.1 behind a proxy, otherwise prompts for a private LAN address.')
+    parser.add_argument('--port', type=int, help='Published port; defaults to 3001 behind a proxy, or 8443 for local HTTPS.')
     parser.add_argument('--name', default='stow', help='System service prefix; defaults to stow.')
     parser.add_argument('--state-dir', type=Path, default=Path('/var/lib/stow'), help='Persistent notes, settings, and certificates; defaults to /var/lib/stow.')
     parser.add_argument('--password-file', type=Path, help='Read the initial password from a private file instead of prompting.')

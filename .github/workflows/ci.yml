@@ -50,9 +50,13 @@ jobs:
             build/test-results
             build/playwright-report
           retention-days: 7
-  home-hosting:
+  hosting:
     runs-on: ubuntu-24.04
     timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        mode: [home, proxy-loopback, proxy-lan]
     defaults:
       run:
         working-directory: stow-git
@@ -73,12 +77,12 @@ jobs:
           mkdir -p ../build
           cp package.json package-lock.json ../build/
           npm ci --prefix ../build --ignore-scripts --cache ../build/npm-cache
-      - name: Install, use, and update a home server over trusted HTTPS
-        run: sudo python3 -B tests/hosting/smoke.py
-      - name: Upload home hosting diagnostics
+      - name: Install, use, and update a server over trusted HTTPS
+        run: sudo python3 -B tests/hosting/smoke.py --mode ${{ matrix.mode }}
+      - name: Upload hosting diagnostics
         if: failure()
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
-          name: home-hosting-diagnostics
-          path: build/logs/home-hosting
+          name: hosting-${{ matrix.mode }}-diagnostics
+          path: build/logs/hosting-${{ matrix.mode }}
           retention-days: 7

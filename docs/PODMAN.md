@@ -2,7 +2,7 @@
 
 The repository includes a [Containerfile](../Containerfile) for building the native server and browser assets. These instructions build from source and run Stow behind an existing HTTPS proxy. They do not install that proxy or configure a service to start at boot.
 
-For a home server without a domain name, the [home setup](HOME_HOSTING.md) handles HTTPS, device certificates, and boot services.
+For an installer that also manages boot services and updates, use the [internet setup](INTERNET_HOSTING.md) behind your existing HTTPS proxy, or the [home setup](HOME_HOSTING.md) without a domain name. The commands below are for managing the container yourself.
 
 ## Build
 

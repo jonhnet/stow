@@ -1,22 +1,23 @@
-"""Protect persistent home installations from unsafe setup and update attempts."""
+"""Protect persistent installations from unsafe setup and update attempts."""
 import argparse
 import importlib.util
 import io
 import json
 import os
 from pathlib import Path
+import socket
 import subprocess
 import tempfile
 import unittest
 from contextlib import redirect_stdout
 from unittest.mock import patch
 
-spec = importlib.util.spec_from_file_location('home_setup', Path(__file__).resolve().parents[2] / 'self-host.py')
+spec = importlib.util.spec_from_file_location('stow_setup', Path(__file__).resolve().parents[2] / 'self-host.py')
 hosting = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(hosting)
 
 
-class HomeSetup(unittest.TestCase):
+class Setup(unittest.TestCase):
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory(prefix='stow-home-unit-')
         self.addCleanup(self.temporary.cleanup)
@@ -25,27 +26,36 @@ class HomeSetup(unittest.TestCase):
         self.unit_dir = self.root / 'units'
         self.source = self.root / 'workspace/stow-git'
         self.source.mkdir(parents=True)
+        (self.source / 'deploy').mkdir()
+        (self.source / 'deploy/nginx-location.conf').write_text(
+            (Path(__file__).resolve().parents[2] / 'deploy/nginx-location.conf').read_text())
         self.password_file = self.root / 'password'
         self.password_file.write_text('literal $password "with quotes" # and spaces\n')
         self.args = argparse.Namespace(address='192.168.1.20', port=None, name='stow-test',
-                                       state_dir=self.state, password_file=self.password_file, build_network=None)
+                                       state_dir=self.state, password_file=self.password_file, build_network=None, behind_proxy=None)
         for name, value in [('SOURCE', self.source), ('UNIT_DIR', self.unit_dir)]:
             p = patch.object(hosting, name, value)
             p.start()
             self.addCleanup(p.stop)
 
-    def existing(self):
+    def existing(self, *, proxy=False):
         self.state.mkdir()
         settings = {'schema': 1, 'address': '192.168.1.20', 'port': 8443, 'name': 'stow-test', 'installed': True}
+        if proxy:
+            settings.update(mode='proxy', url='https://stow.example.com', address='127.0.0.1', port=3001)
         (self.state / 'settings.json').write_text(json.dumps(settings))
         (self.state / 'stow.env').write_text('STOW_PASSWORD=existing password\n')
-        (self.state / 'Caddyfile').write_text('previous Caddy configuration\n')
+        if proxy:
+            (self.state / 'nginx-location.conf').write_text(hosting.nginx_location(settings))
+        else:
+            (self.state / 'Caddyfile').write_text('previous Caddy configuration\n')
         (self.state / 'notes').mkdir()
         (self.state / 'notes/session-secret').write_text('existing identity')
-        authority = self.state / 'tls/caddy/pki/authorities/local'
-        authority.mkdir(parents=True)
-        (authority / 'root.crt').write_text('existing certificate')
-        (authority / 'root.key').write_text('existing private key')
+        if not proxy:
+            authority = self.state / 'tls/caddy/pki/authorities/local'
+            authority.mkdir(parents=True)
+            (authority / 'root.crt').write_text('existing certificate')
+            (authority / 'root.key').write_text('existing private key')
         self.args.address = None
         self.args.password_file = None
         self.unit_dir.mkdir()
@@ -62,9 +72,11 @@ class HomeSetup(unittest.TestCase):
                 raise subprocess.CalledProcessError(1, args)
             return 'sha256:new-image' if kwargs.get('capture') else None
 
-        def ready(*args):
+        def ready(settings, state):
             if fail_ready:
                 raise ValueError('HTTPS failed')
+            if settings.get('mode') == 'proxy':
+                return None
             ca = self.state / 'tls/caddy/pki/authorities/local/root.crt'
             if not ca.exists():
                 ca.parent.mkdir(parents=True)
@@ -89,6 +101,80 @@ class HomeSetup(unittest.TestCase):
                         self.fail('Concurrent setup acquired the same lock')
             with hosting.setup_lock(lock):
                 pass
+
+    def test_proxy_install_defaults_to_loopback_http_with_password_auth_and_no_ca(self):
+        self.args.behind_proxy = 'https://Stow.Example.com:443/'
+        self.args.address = None
+        calls = self.invoke()
+        settings = json.loads((self.state / 'settings.json').read_text())
+        self.assertEqual(hosting.origin(settings), 'https://stow.example.com')
+        self.assertEqual(hosting.backend_url(settings), 'http://127.0.0.1:3001')
+        self.assertEqual(list(self.unit_dir.iterdir()), [self.unit_dir / 'stow-test-app.container'])
+        self.assertIn('PublishPort=127.0.0.1:3001:3001/tcp', (self.unit_dir / 'stow-test-app.container').read_text())
+        self.assertIn('STOW_AUTH_MODE=password\n', (self.state / 'stow.env').read_text())
+        self.assertIn('STOW_ORIGIN=https://stow.example.com\n', (self.state / 'stow.env').read_text())
+        self.assertFalse((self.state / 'tls').exists())
+        self.assertFalse((self.state / 'Caddyfile').exists())
+        self.assertFalse(any(call[:2] == ('podman', 'pull') for call in calls))
+        self.assertIn(('systemctl', 'restart', 'stow-test-app.service'), calls)
+
+    def test_proxy_url_rejects_http_paths_credentials_and_config_injection(self):
+        for url in ['', 'http://stow.example.com', 'https://localhost', 'https://127.0.0.1',
+                    'https://stow.example.com/notes', 'https://user:pass@stow.example.com',
+                    'https://stow.example.com?x', 'https://stow.example.com#x',
+                    'https://stow.example.com\nSTOW_AUTH_MODE=proxy', 'https://bad_host.example.com',
+                    'https://stow.example.com:0', 'https://stow.example.com:65536', 'https://stow.example.com:']:
+            with self.subTest(url=url), self.assertRaises(ValueError):
+                hosting.public_url(url)
+        self.assertEqual(hosting.public_url('https://stow.example.com:8443'), 'https://stow.example.com:8443')
+
+    def test_occupied_backend_port_fails_before_creating_state_or_building(self):
+        self.args.behind_proxy = 'https://stow.example.com'
+        self.args.address = '127.0.0.1'
+        with socket.socket() as occupied, patch.object(hosting.os, 'geteuid', return_value=0), \
+                patch.object(hosting, 'run') as command:
+            occupied.bind(('127.0.0.1', 0))
+            self.args.port = occupied.getsockname()[1]
+            with self.assertRaises(OSError):
+                hosting.install(self.args)
+            command.assert_not_called()
+        self.assertFalse(self.state.exists())
+
+    def test_proxy_binding_never_defaults_to_a_public_or_wildcard_address(self):
+        for address in ['0.0.0.0', '8.8.8.8', '::', '169.254.1.1']:
+            with self.subTest(address=address), self.assertRaises(ValueError):
+                hosting.validate(address, 3001, 'stow', self.state, proxy=True)
+        for address in ['127.0.0.1', '192.168.1.20']:
+            self.assertEqual(hosting.validate(address, 3001, 'stow', self.state, proxy=True), address)
+
+    def test_proxy_update_keeps_origin_password_and_identity_without_requiring_a_ca(self):
+        self.existing(proxy=True)
+        retained = ['stow.env', 'notes/session-secret']
+        before = {name: (self.state / name).read_bytes() for name in retained}
+        self.args.address = '192.168.1.20'
+        self.args.port = 3002
+        self.invoke()
+        self.assertEqual(before, {name: (self.state / name).read_bytes() for name in retained})
+        self.assertIn('http://192.168.1.20:3002', (self.state / 'nginx-location.conf').read_text())
+        self.args.behind_proxy = 'https://other.example.com'
+        with self.assertRaisesRegex(ValueError, 'changing origin'):
+            self.invoke()
+
+    def test_home_installation_cannot_be_silently_converted_to_proxy_mode(self):
+        self.existing()
+        self.args.behind_proxy = 'https://stow.example.com'
+        with self.assertRaisesRegex(ValueError, 'different hosting mode'):
+            self.invoke()
+        self.assertTrue((self.unit_dir / 'stow-test-https.container').exists())
+
+    def test_failed_proxy_update_restores_backend_settings_and_nginx_config(self):
+        self.existing(proxy=True)
+        before = {p: p.read_text() for p in [self.unit_dir / 'stow-test-app.container',
+                  self.state / 'nginx-location.conf', self.state / 'settings.json']}
+        self.args.port = 3002
+        with self.assertRaisesRegex(ValueError, 'HTTPS failed'):
+            self.invoke(fail_ready=True)
+        self.assertEqual(before, {p: p.read_text() for p in before})
 
     def test_only_private_ipv4_addresses_can_be_published(self):
         for address in ['0.0.0.0', '127.0.0.1', '169.254.1.1', '8.8.8.8', '224.0.0.1', '::1', 'notes.example.com']:

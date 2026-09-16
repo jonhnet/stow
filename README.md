@@ -30,17 +30,13 @@ Browsers require HTTPS for Stow's offline support and security APIs, even on you
 
 ## Self-host an internet-facing production server
 
-Use your existing nginx HTTPS proxy. The Stow application container serves HTTP; the home setup supplies HTTPS through a separate Caddy container.
+Run the [internet setup](docs/INTERNET_HOSTING.md) to put Stow behind your existing HTTPS proxy. One command builds the container, prompts for a Stow password, and installs its boot service. Point your domain and HTTPS proxy at the resulting HTTP endpoint; the installer supplies an nginx configuration snippet.
 
-1. Deploy Stow with Podman, persistent storage, and a Stow password. Set `STOW_ORIGIN=https://stow.example.com`. Make its HTTP endpoint available to nginx: for example, `127.0.0.1:3001` on the same host, or a private address restricted to the proxy if nginx runs elsewhere.
-2. Point `stow.example.com` at nginx and add a site that forwards requests to Stow's HTTP endpoint. Preserve the original `Host` header and enable [WebSocket forwarding](https://nginx.org/en/docs/http/websocket.html) for synchronization. Configure a valid HTTPS certificate and automatic renewal, for example with [Certbot](https://certbot.eff.org/instructions?ws=nginx&os=snap).
-3. Open `https://stow.example.com`, sign in, and optionally install the PWA. Devices can sync wherever they have internet access; no per-device certificate installation is needed.
-
-The [Podman guide](docs/PODMAN.md) has manual container commands for a proxy on the same host. An installer mode that manages this deployment's boot services and updates is still proposed.
+Open your HTTPS URL, sign in, and optionally install the PWA. Devices sync wherever they have internet access; no per-device certificate installation is needed.
 
 ## Back up and restore
 
-For the home setup, follow its [backup and restore commands](docs/HOME_HOSTING.md#back-up-and-restore), which also preserve the password and local certificate authority.
+For an installer-managed server, follow the [home](docs/HOME_HOSTING.md#back-up-and-restore) or [internet](docs/INTERNET_HOSTING.md#back-up-and-restore) backup commands, which also preserve its private configuration.
 
 Back up the **complete data directory**, including `session-secret`, `vault-incarnations.json` if an [account reset](docs/account-reset.md) has been performed, and each vault's `vault.yjs`, `updates/`, `blobs/`, `blob-cleanup.json`, `history/`, and `history-retention.json` under `users/` (or the data directory itself in password mode). A snapshot alone can omit newer edits stored in `updates/`. Include any retained original files too. The server secret and account reset registry determine current user vault IDs, so preserve them. Stop the service first so snapshots, update logs, and blobs are copied together consistently. For the container described in the [Podman guide](docs/PODMAN.md), run `podman stop stow` before copying its volume and `podman start stow` afterward.
 
