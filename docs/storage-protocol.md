@@ -16,9 +16,29 @@ The worker owns the append/sanitize/encode/replace transaction. Another tab's wr
 
 Worker death before a write, during compaction, or after commit leaves unacknowledged input retryable. Page departure waits for durability before releasing the worker and vault; a failed departure retains the in-memory current data and offers an emergency backup. Returning through browser navigation history reloads durable data. Storage protection is requested only through the explicit Settings button. Incremental label invalidation, memoized checklist rows, textarea measurement, cooperative search construction, and account-scoped tab broadcasts remain in place.
 
-## Sync protocol 2
+## Sync protocol 3
 
-WebSocket admission requires both `protocol=2` and `schema=stow-current-v1`, plus the exact verified `vaultId`. Rejection happens before opening account data. Password/proxy authentication, private proxy proof, incarnation reset, origin rules, and account-scoped HTTP headers remain required.
+Protocol 3 retains protocol 2's frame format, but requires readers to understand
+body-to-checklist conversion masks and duplicate projections. Earlier clients
+must reload before syncing; the current vault schema and existing data stay valid.
+
+Conversion records carry the identities of the source characters and their
+initial text/rank. Equivalent conversions display once; intentional repeated
+lines have different character identities. Untouched copies are suppressed when
+a copy is edited or deleted. Distinct edited copies remain visible as conflict
+versions, and children of equivalent parents follow the visible parent. Raw
+records remain independent so reconnection cannot overwrite nested text edits.
+
+`text-mask:*` fields in the owning note hold exact Yjs character spans for each
+conversion. They hide the original body/title/join characters without deleting
+them, so concurrent Undo reveals the original once instead of reinserting copies.
+Later insertions have new identities and remain visible. Body editing skips
+masked spans. This retains original converted text as current structural data
+(and separate records for concurrent conversions), not a keystroke history.
+Permanent source deletion removes the owning note and its masks. Both browser
+projection and Rust history capture apply these rules without writing repairs.
+
+WebSocket admission requires both `protocol=3` and `schema=stow-current-v1`, plus the exact verified `vaultId`. Rejection happens before opening account data. Password/proxy authentication, private proxy proof, incarnation reset, origin rules, and account-scoped HTTP headers remain required.
 
 All messages use `SyncTransfer`: JSON control frames (`begin`, receipts, `done`, failure) and ordered binary chunks, each with an eight-byte transfer-ID/offset prefix. SHA-256 validates a complete logical unit before application. Chunk receipts grant flow-control credit; `done` follows fsync on the server or IndexedDB commit in the browser. Lost acknowledgments replay safely through Yjs idempotence.
 

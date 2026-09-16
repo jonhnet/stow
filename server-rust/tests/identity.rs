@@ -105,7 +105,7 @@ async fn reset_rotates_only_selected_account_preserves_backup_and_rejects_stale_
         Socket::query(
             &s,
             &auth("owner", None),
-            &format!("schema={CURRENT_SCHEMA}&protocol=2&vaultId={old}")
+            &format!("schema={CURRENT_SCHEMA}&protocol=3&vaultId={old}")
         )
         .await
         .is_err()

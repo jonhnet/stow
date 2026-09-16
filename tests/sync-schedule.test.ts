@@ -24,6 +24,19 @@ if (replay) {
   for (const seed of seeds) test(`seeded sync schedule ${seed}: structural edits, interruptions and durable reload`, t => runSchedule(generatedSchedule(seed, length), t));
 
   for (const order of orders) for (const sharedTabs of [false, true]) {
+    test(`three offline conversions reconnect ${order.join('-')} (${sharedTabs ? 'shared tabs' : 'separate devices'})`, async t => {
+      const actions: Omit<Step, 'id'>[] = [
+        ...[0, 1, 2].map(actor => ({ actor, action: 'partition' as const })),
+        ...[0, 1, 2].map(actor => ({ actor, action: 'convert' as const })),
+        { actor: 0, action: 'undo' }, { actor: 0, action: 'redo' },
+        { actor: 1, action: 'compact' }, { actor: 2, action: 'reload' },
+        ...order.map(actor => ({ actor, action: 'reconnect' as const })),
+      ];
+      await runSchedule({ version: 1, seed: 4000 + orders.indexOf(order), sharedTabs, steps: actions.map((step, index) => ({ ...step, id: index + 1 })) }, t, harness => {
+        const items = harness.replicas[0].vault.getItems('one');
+        assert.equal(items.filter(item => item.text === 'Body one').length, 1);
+      });
+    });
     test(`merge, late edits and permanent deletion reconnect ${order.join('-')} (${sharedTabs ? 'shared tabs' : 'separate devices'})`, async t => {
       const actions: Omit<Step, 'id'>[] = [
         ...[0, 1, 2].map(actor => ({ actor, action: 'partition' as const })),

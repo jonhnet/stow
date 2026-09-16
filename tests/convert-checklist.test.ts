@@ -11,6 +11,13 @@ function model(t: TestContext, source?: Vault) {
   return vault;
 }
 function withoutModified({ updatedAt: _, ...note }: Note) { return note; }
+function sync(...vaults: Vault[]) {
+  const updates = vaults.map(vault => Y.encodeStateAsUpdate(vault.doc));
+  for (const vault of vaults) for (const update of [...updates].reverse()) {
+    Y.applyUpdate(vault.doc, update, 'remote'); Y.applyUpdate(vault.doc, update, 'remote');
+  }
+  for (const vault of vaults.slice(1)) assert.deepEqual(vault.getNotes(), vaults[0].getNotes());
+}
 
 test('conversion preserves literal nonblank lines and metadata, with one history boundary and undo entry', t => {
   const vault = model(t), body = '\r\n**First**\r\n \t \n  *Second*  \rThird 🐸\n';
@@ -92,9 +99,7 @@ test('offline conversion retains concurrent body and checklist edits after synch
   assert.deepEqual(local.getItems(id).map(item => item.text), ['Edited elsewhere']);
 });
 
-for (const lines of [['One', 'Two'], ['One', 'One', 'Two']]) test(`concurrent offline conversions preserve each source line once: ${lines.join(' / ')}`, {
-  todo: 'Concurrent conversions currently create duplicate items; remove this TODO when they reconcile.',
-}, t => {
+for (const lines of [['One', 'Two'], ['One', 'One', 'Two']]) test(`concurrent offline conversions preserve each source line once: ${lines.join(' / ')}`, t => {
   const local = model(t), id = local.createNote('text', { body: lines.join('\n') });
   local.finishEdit();
   const remote = model(t, local);
@@ -130,4 +135,79 @@ test('blank, missing and trashed notes are no-ops, including repeated conversion
   const before = Y.encodeStateAsUpdate(vault.doc);
   for (const id of [empty, trash, converted, 'missing']) assert.equal(vault.convertBodyToChecklist(id), false);
   assert.deepEqual(Y.encodeStateAsUpdate(vault.doc), before);
+});
+
+for (const disconnectedUndo of [false, true]) test(`concurrent conversions undo and redo without duplicating the body (${disconnectedUndo ? 'offline' : 'connected'} undo)`, t => {
+  const a = model(t), body = 'One 🦀\r\nOne 🦀\nTwo', id = a.createNote('text', { body });
+  const b = model(t, a);
+  a.convertBodyToChecklist(id); b.convertBodyToChecklist(id); sync(a, b);
+  a.undo();
+  if (!disconnectedUndo) {
+    sync(a, b);
+    assert.equal(a.getNote(id)!.body, '');
+    assert.deepEqual(a.getItems(id).map(item => item.text), ['One 🦀', 'One 🦀', 'Two']);
+  }
+  b.undo(); sync(a, b);
+  assert.equal(a.getNote(id)!.body, body); assert.equal(a.getItems(id).length, 0);
+  a.redo(); b.redo(); sync(a, b);
+  assert.equal(a.getNote(id)!.body, '');
+  assert.deepEqual(a.getItems(id).map(item => item.text), ['One 🦀', 'One 🦀', 'Two']);
+});
+
+test('three converters retain edits, checks, children, deletion and divergent versions through a fresh reload', t => {
+  const a = model(t), id = a.createNote('text', { body: 'One\nTwo\nThree' }), b = model(t, a), c = model(t, a);
+  for (const vault of [a, b, c]) vault.convertBodyToChecklist(id);
+  const left = a.getItems(id), right = b.getItems(id);
+  a.setItemText(left[0].id, 'One edited here'); a.finishEdit();
+  b.toggleItem(right[1].id);
+  const child = c.addItem(id, 'Late child', c.getItems(id)[0].id);
+  a.deleteItem(left[2].id);
+  sync(a, b, c);
+  const items = a.getItems(id);
+  assert.deepEqual(items.map(item => item.text), ['One edited here', 'Late child', 'Two']);
+  assert.equal(items[1].id, child); assert.equal(items[1].parentId, items[0].id);
+  assert.equal(items[2].checked, true);
+  assert.equal(a.items.size, 10, 'Independent records are retained, not overwritten during deduplication');
+
+  // A late edit to the previously equivalent copy must become visible.
+  b.setItemText(right[0].id, 'One edited elsewhere'); b.finishEdit(); sync(a, b, c);
+  assert.deepEqual(a.getItems(id).filter(item => item.text.startsWith('One')).map(item => item.text).sort(), ['One edited elsewhere', 'One edited here']);
+  const bytes = Y.encodeStateAsUpdate(a.doc), reloaded = model(t);
+  Y.applyUpdate(reloaded.doc, bytes, 'remote');
+  assert.deepEqual(reloaded.getNotes(), a.getNotes());
+  let writes = 0; reloaded.doc.on('update', () => writes++);
+  reloaded.getNotes(); reloaded.captureHistoryState([id]); assert.equal(writes, 0);
+});
+
+test('typing, clearing, another conversion and Undo edit only visible body characters', t => {
+  const a = model(t), id = a.createNote('text', { body: 'Original\nOriginal' }), b = model(t, a);
+  a.convertBodyToChecklist(id);
+  a.setNoteText(id, 'body', 'New 🦀'); a.finishEdit();
+  assert.equal(a.getNote(id)!.body, 'New 🦀');
+  a.setNoteText(id, 'body', ''); a.finishEdit(); a.undo();
+  assert.equal(a.getNote(id)!.body, 'New 🦀');
+  a.convertBodyToChecklist(id);
+  assert.deepEqual(a.getItems(id).map(item => item.text), ['New 🦀', 'Original', 'Original']);
+  a.undo();
+  assert.equal(a.getNote(id)!.body, 'New 🦀');
+  b.setNoteText(id, 'body', 'Original\nOriginal\nLate 🐸'); b.finishEdit(); sync(a, b);
+  assert.match(a.getNote(id)!.body, /Late 🐸/);
+  assert.match(a.getNote(id)!.body, /New 🦀/);
+  assert(!a.getNote(id)!.body.includes('Original'));
+  a.setNoteText(id, 'body', 'Replacement'); a.finishEdit();
+  assert.equal(a.getNote(id)!.body, 'Replacement');
+  assert.deepEqual(a.getItems(id).map(item => item.text), ['Original', 'Original']);
+  a.undo(); sync(a, b);
+  assert.match(a.getNote(id)!.body, /Late 🐸/);
+});
+
+for (const legacy of [false, true]) test(`concurrent conversion of a ${legacy ? 'legacy' : 'current'} merged note retains source ownership`, t => {
+  const a = model(t), first = a.createNote('text', { title: 'First', body: 'One 🦀' }), second = a.createNote('text', { title: 'Second', body: 'Two' });
+  if (legacy) a.merges.set('legacy', { a: first, b: second }); else a.mergeNotes([first, second]);
+  const b = model(t, a), before = a.getNote(first)!;
+  a.convertBodyToChecklist(first); b.convertBodyToChecklist(second); sync(a, b);
+  assert.equal(a.getNote(first)!.body, '');
+  assert.deepEqual(a.getItems(first).map(item => item.text), before.body.split('\n').filter(line => line.trim()));
+  a.undo(); b.undo(); sync(a, b);
+  assert.deepEqual(withoutModified(a.getNote(first)!), withoutModified(before));
 });

@@ -9,7 +9,154 @@ use icu_properties::{
 };
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
-use yrs::{Doc, Transact};
+use yrs::{ClientID, Doc, ID, Map, Out, ReadTxn, Text, Transact, TransactionMut};
+
+// Character masks retain the original text so concurrent conversion Undo never
+// inserts it twice. Match src/core/converted-text.ts; new character IDs stay live.
+fn visible_text(
+    tx: &mut TransactionMut,
+    owner: &str,
+    note: &Value,
+    field: &str,
+    join: Option<&str>,
+) -> String {
+    let masks: Vec<&Value> = note
+        .as_object()
+        .into_iter()
+        .flat_map(|n| n.iter())
+        .filter(|(key, mask)| {
+            key.starts_with("text-mask:")
+                && mask["field"] == field
+                && mask["joinId"].as_str() == join
+        })
+        .flat_map(|(_, mask)| mask["spans"].as_array().into_iter().flatten())
+        .collect();
+    if masks.is_empty() {
+        return if let Some(join) = join {
+            string(&get(tx, "textJoins", join)).into()
+        } else {
+            string(&note[field]).into()
+        };
+    }
+    let value = if let Some(join) = join {
+        tx.get_map("textJoins").and_then(|map| map.get(tx, join))
+    } else {
+        tx.get_map("notes")
+            .and_then(|map| map.get(tx, owner))
+            .and_then(|v| match v {
+                Out::YMap(map) => map.get(tx, field),
+                _ => None,
+            })
+    };
+    let Some(Out::YText(text)) = value else {
+        return String::new();
+    };
+    // A synthetic current snapshot excludes only the masked character IDs.
+    // Yrs walks spans once; per-character sticky-index lookup is quadratic on
+    // heavily edited text. Splitting snapshot boundaries authors no CRDT update.
+    let mut snapshot = tx.snapshot();
+    for span in masks {
+        if let (Some(client), Some(clock), Some(length)) = (
+            span["client"].as_u64(),
+            span["clock"].as_u64(),
+            span["length"].as_u64(),
+        ) && let (Ok(clock), Ok(length)) = (u32::try_from(clock), u32::try_from(length))
+            && client <= 9_007_199_254_740_991
+            && length > 0
+            && clock.checked_add(length).is_some()
+        {
+            snapshot
+                .delete_set
+                .insert(ID::new(ClientID::new(client), clock), length);
+        }
+    }
+    text.diff_range(tx, Some(&snapshot), None, |change| change)
+        .into_iter()
+        .map(|diff| diff.insert.to_string(tx))
+        .collect()
+}
+
+// Keep independently edited copies, but suppress untouched conversion duplicates
+// and remap children of equivalent parents. Match converted-checklist.ts.
+fn converted_items(items: Vec<(String, Value)>) -> Vec<(String, Value)> {
+    let mut groups = BTreeMap::<String, Vec<(String, Value)>>::new();
+    let mut result = Vec::new();
+    for (id, item) in items {
+        if let Some(source) = item["conversion"]["source"].as_str() {
+            groups.entry(source.into()).or_default().push((id, item));
+        } else {
+            result.push((id, item));
+        }
+    }
+    let mut aliases = BTreeMap::new();
+    let signature = |item: &Value| {
+        json!([
+            item["text"],
+            truthy(&item["checked"]),
+            if string(&item["parentId"]).is_empty() {
+                Value::Null
+            } else {
+                item["parentId"].clone()
+            },
+            if item["rank"] == item["conversion"]["rank"] {
+                Value::Null
+            } else {
+                item["rank"].clone()
+            },
+            truthy(&item["deleted"])
+        ])
+        .to_string()
+    };
+    for group in groups.values_mut() {
+        group.sort_by(|a, b| a.0.cmp(&b.0));
+        let edited: Vec<_> = group
+            .iter()
+            .filter(|(_, item)| {
+                truthy(&item["deleted"])
+                    || truthy(&item["checked"])
+                    || !string(&item["parentId"]).is_empty()
+                    || item["text"] != item["conversion"]["text"]
+                    || item["rank"] != item["conversion"]["rank"]
+            })
+            .collect();
+        let mut variants = BTreeMap::new();
+        for (id, item) in if edited.is_empty() {
+            group.iter().collect()
+        } else {
+            edited
+        } {
+            variants.entry(signature(item)).or_insert((id, item));
+        }
+        let mut selected: Vec<_> = variants.values().copied().collect();
+        selected.sort_by(|a, b| a.0.cmp(b.0));
+        let fallback = selected
+            .iter()
+            .find(|(_, item)| !truthy(&item["deleted"]))
+            .unwrap_or(&selected[0])
+            .0;
+        for (id, item) in group.iter() {
+            aliases.insert(
+                id.clone(),
+                variants
+                    .get(&signature(item))
+                    .map_or(fallback, |(id, _)| id)
+                    .clone(),
+            );
+        }
+        result.extend(
+            selected
+                .into_iter()
+                .map(|(id, item)| (id.clone(), item.clone())),
+        );
+    }
+    result.retain(|(_, item)| !truthy(&item["deleted"]));
+    for (_, item) in &mut result {
+        if let Some(parent) = aliases.get(string(&item["parentId"])) {
+            item["parentId"] = json!(parent);
+        }
+    }
+    result
+}
 
 pub fn groups(doc: &Doc) -> Vec<Vec<String>> {
     let tx = doc.transact();
@@ -77,7 +224,7 @@ pub fn capture(doc: &Doc, selected: &[String]) -> Result<Value> {
         .filter(|g| g.iter().any(|id| wanted.contains(id)))
         .collect();
     let ids: Ids = groups.iter().flatten().cloned().collect();
-    let tx = doc.transact();
+    let mut tx = doc.transact_mut();
     let mut sources = serde_json::Map::new();
     for id in &ids {
         let n = get(&tx, "notes", id);
@@ -87,6 +234,9 @@ pub fn capture(doc: &Doc, selected: &[String]) -> Result<Value> {
             .cloned()
             .unwrap_or_else(|| json!({"pinned":truthy(&n["pinned"]),"sortOrderDate":created}));
         let mut v = json!({"title":n["title"].as_str().unwrap_or(""),"body":n["body"].as_str().unwrap_or(""),"kind":n["kind"].as_str().unwrap_or("text"),"color":n["color"].as_str().unwrap_or("default"),"pinned":placement["pinned"],"sortOrderDate":placement["sortOrderDate"],"archived":truthy(&n["archived"]),"trashed":truthy(&n["trashed"]),"createdAt":created,"updatedAt":n.get("updatedAt").cloned().unwrap_or(json!(0)),"items":{},"images":{}});
+        for field in ["title", "body"] {
+            v[field] = json!(visible_text(&mut tx, id, &n, field, None));
+        }
         if n.get("unifiedChecklist").is_some() {
             v["unifiedChecklist"] = json!(truthy(&n["unifiedChecklist"]));
         }
@@ -140,7 +290,19 @@ pub fn capture(doc: &Doc, selected: &[String]) -> Result<Value> {
         }
         sources.insert(id.clone(), v);
     }
+    let mut source_items = BTreeMap::<String, Vec<(String, Value)>>::new();
+    let components: BTreeMap<_, _> = groups
+        .iter()
+        .flat_map(|group| group.iter().map(|id| (id.as_str(), group[0].as_str())))
+        .collect();
     for (id, item) in entries(&tx, "items", None) {
+        let owner = string(&item["noteId"]);
+        source_items
+            .entry(components.get(owner).copied().unwrap_or(owner).into())
+            .or_default()
+            .push((id, item));
+    }
+    for (id, item) in source_items.into_values().flat_map(converted_items) {
         let owner = string(&item["noteId"]);
         if let Some(source) = sources.get_mut(owner)
             && !truthy(&item["deleted"])
@@ -179,7 +341,12 @@ pub fn capture(doc: &Doc, selected: &[String]) -> Result<Value> {
                             "This note composition refers to missing joining text.",
                         ));
                     }
-                    joins.insert(id.into(), value);
+                    let owner = string(&run["sourceId"]);
+                    let owner_note = get(&tx, "notes", owner);
+                    joins.insert(
+                        id.into(),
+                        json!(visible_text(&mut tx, owner, &owner_note, "join", Some(id))),
+                    );
                 }
             }
             recipes.insert(id, r);

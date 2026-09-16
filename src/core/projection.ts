@@ -6,6 +6,8 @@ import { compareAttachmentOrder } from './attachments';
 import { effectiveLabels, hasLabelRecord, type LabelLifecycle } from './labels';
 import { notePlacement } from './note-order';
 import { composeText, materializeNote, type MergeRecipe } from './merged-text';
+import { coalesceConversions, type ConversionItem } from './converted-checklist';
+import { visibleText } from './converted-text';
 
 type RecordMap = Y.Map<any>;
 type SourceView = SourceNote;
@@ -18,7 +20,9 @@ export class VaultProjection {
   private itemsBySource = new Map<string, Set<string>>();
   private imagesBySource = new Map<string, Set<string>>();
   private itemViews = new Map<string, Item[]>();
-  private itemRecords = new Map<string, Item>();
+  private itemRecords = new Map<string, ConversionItem>();
+  private itemConversions = new Map<string, string>();
+  private conversionItems = new Map<string, Set<string>>();
   private historyItems = new WeakMap<Item, HistoryItem>();
   private historyItemMaps = new WeakMap<Item[], Record<string, HistoryItem>>();
   private historySources = new WeakMap<SourceView, HistorySource>();
@@ -52,6 +56,7 @@ export class VaultProjection {
     const onImages = (event: Y.YMapEvent<Attachment>) => { for (const id of event.keysChanged) this.imageChanged(id); };
     const onMerges = (event: Y.YMapEvent<{ a: string; b: string }>) => {
       const sources = [...event.changes.keys].flatMap(([id, change]) => [change.oldValue, merges.get(id)].filter(Boolean).flatMap(edge => [edge.a, edge.b]));
+      for (const id of sources.flatMap(id => this.sourceIds(id))) { this.itemViews.delete(id); this.sourceViews.delete(id); }
       this.compositionChanged(sources); this.membershipChanged();
     };
     const onRecipes = (event: Y.YMapEvent<MergeRecipe>) => {
@@ -99,21 +104,44 @@ export class VaultProjection {
       this.itemViews.delete(owner); this.sourceChanged(owner);
     }
   }
-  itemChanged(id: string) { this.itemRecords.delete(id); this.ownerChange(id, this.items.get(id)?.get('noteId'), this.itemOwners, this.itemsBySource); }
+  itemChanged(id: string) {
+    const old = this.itemConversions.get(id), key = this.items.get(id)?.get('conversion')?.source as string | undefined;
+    const owners = new Set([this.itemOwners.get(id), this.items.get(id)?.get('noteId')].filter((id): id is string => !!id));
+    if (old) { this.conversionItems.get(old)?.delete(id); this.itemConversions.delete(id); }
+    if (key) {
+      let set = this.conversionItems.get(key); if (!set) this.conversionItems.set(key, set = new Set());
+      set.add(id); this.itemConversions.set(id, key);
+    }
+    this.itemRecords.delete(id); this.ownerChange(id, this.items.get(id)?.get('noteId'), this.itemOwners, this.itemsBySource);
+    // A different representative can change parent aliases in another source
+    // of this merged note, even when that source's own records did not change.
+    if (old || key) for (const owner of owners) for (const source of this.sourceIds(owner)) {
+      this.itemViews.delete(source); this.sourceChanged(source);
+    }
+  }
   imageChanged(id: string) { this.ownerChange(id, this.attachments.get(id)?.noteId, this.imageOwners, this.imagesBySource); }
   sourceItems(id: string): Item[] {
     const cached = this.itemViews.get(id); if (cached) return cached;
-    const result: Item[] = [];
-    for (const itemId of this.itemsBySource.get(id) ?? []) {
+    const result: ConversionItem[] = [], selected = new Set(this.itemsBySource.get(id));
+    const members = new Set(this.sourceIds(id));
+    for (const itemId of selected) {
+      const item = this.items.get(itemId);
+      for (const key of [this.itemConversions.get(itemId), this.itemConversions.get(item?.get('parentId'))]) {
+        if (key) for (const candidate of this.conversionItems.get(key) ?? []) {
+          if (members.has(this.itemOwners.get(candidate)!)) selected.add(candidate);
+        }
+      }
+    }
+    for (const itemId of selected) {
       const cached = this.itemRecords.get(itemId);
       if (cached) { result.push(cached); continue; }
       const item = this.items.get(itemId);
-      if (item && !item.get('deleted') && item.get('text')) {
-        const view = { id: itemId, noteId: id, text: item.get('text').toString(), checked: !!item.get('checked'), rank: Number(item.get('rank')) || 0, ...(typeof item.get('parentId') === 'string' && item.get('parentId') ? { parentId: item.get('parentId') } : {}) };
+      if (item && item.get('text')) {
+        const view = { id: itemId, noteId: item.get('noteId'), text: item.get('text').toString(), checked: !!item.get('checked'), deleted: !!item.get('deleted'), conversion: item.get('conversion'), rank: Number(item.get('rank')) || 0, ...(typeof item.get('parentId') === 'string' && item.get('parentId') ? { parentId: item.get('parentId') } : {}) };
         this.itemRecords.set(itemId, view); result.push(view);
       }
     }
-    const ordered = orderChecklistItems(result);
+    const ordered = orderChecklistItems(coalesceConversions(result).filter(item => item.noteId === id));
     this.itemViews.set(id, ordered); return ordered;
   }
   source(id: string): SourceView | undefined {
@@ -121,7 +149,7 @@ export class VaultProjection {
     const note = this.notes.get(id); if (!note) return undefined;
     const labels = effectiveLabels(note, this.labelLifecycle);
     const source: SourceView = {
-      id, title: note.get('title')?.toString() ?? '', body: note.get('body')?.toString() ?? '', kind: note.get('kind') ?? 'text',
+      id, title: note.get('title') ? visibleText(note.get('title'), note, 'title') : '', body: note.get('body') ? visibleText(note.get('body'), note, 'body') : '', kind: note.get('kind') ?? 'text',
       color: note.get('color') ?? 'default', ...notePlacement(note), archived: !!note.get('archived'), trashed: !!note.get('trashed'),
       createdAt: note.get('createdAt') ?? 0, updatedAt: note.get('updatedAt') ?? 0,
       ...(labels.length ? { labels } : {}),
@@ -174,7 +202,7 @@ export class VaultProjection {
       if (ref.field !== 'join') return [];
       const text = this.joins.get(ref.joinId);
       if (!(text instanceof Y.Text)) throw new Error('This note composition refers to missing joining text.');
-      return [[ref.joinId, text.toString()]];
+      return [[ref.joinId, visibleText(text, this.notes.get(ref.sourceId)!, 'join', ref.joinId)]];
     })));
   }
   getItems(id: string): Item[] { return this.getNote(id)?.items ?? []; }

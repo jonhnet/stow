@@ -1,2 +1,2 @@
-/** Readers/writers must understand history frontiers before joining this vault. */
-export const SYNC_PROTOCOL_VERSION = '2';
+/** Readers/writers must understand conversion character masks before syncing. */
+export const SYNC_PROTOCOL_VERSION = '3';

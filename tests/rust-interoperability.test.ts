@@ -91,3 +91,51 @@ test('native saved changes and descriptions match browser Unicode splices and wo
     }
   } finally { client.destroy(); }
 });
+
+test('Rust history and browser views agree on conversion masks, duplicate parents and conflict copies', () => {
+  const a = new Vault(), b = new Vault();
+  try {
+    const id = a.createNote('text', { body: 'One 🦀\r\nOne 🦀\nTwo\nThree' });
+    Y.applyUpdate(b.doc, Y.encodeStateAsUpdate(a.doc), 'remote');
+    a.convertBodyToChecklist(id); b.convertBodyToChecklist(id);
+    const left = a.getItems(id), right = b.getItems(id);
+    const check = () => {
+      const l = Y.encodeStateAsUpdate(a.doc), r = Y.encodeStateAsUpdate(b.doc);
+      Y.applyUpdate(a.doc, r, 'remote'); Y.applyUpdate(b.doc, l, 'remote');
+      assert.deepEqual(a.getNotes(), b.getNotes());
+      assert.deepEqual(nativeCommand({ op: 'projection', method: 'capture', doc: Buffer.from(Y.encodeStateAsUpdate(a.doc)).toString('base64'), sourceIds: [id] }), a.captureHistoryState([id]));
+    };
+    check();
+    a.setItemText(left[0].id, 'Edited 🐸'); a.finishEdit();
+    b.addItem(id, 'Child', right[0].id); b.toggleItem(right[2].id);
+    a.deleteItem(left[3].id); check();
+    b.setItemText(right[0].id, 'Another 🐸'); b.finishEdit(); check();
+    a.setNoteText(id, 'body', 'New body 👩‍💻'); a.finishEdit(); check();
+    a.convertBodyToChecklist(id); check(); a.undo(); check();
+    const second = a.createNote('text', { title: 'Other title', body: 'Other body' });
+    a.mergeNotes([id, second]); check();
+    a.convertBodyToChecklist(id); b.convertBodyToChecklist(id); check();
+    a.undo(); b.undo(); check();
+  } finally { a.destroy(); b.destroy(); }
+});
+
+test('a child from another merged source follows the surviving converted parent in browser and Rust history', () => {
+  const a = new Vault(), b = new Vault();
+  try {
+    const id = a.createNote('text', { body: 'Parent' }), other = a.createNote('checklist', { title: 'Other' });
+    const child = a.addItem(other, 'Child'); a.mergeNotes([id, other]);
+    Y.applyUpdate(b.doc, Y.encodeStateAsUpdate(a.doc), 'remote');
+    a.convertBodyToChecklist(id); b.convertBodyToChecklist(id);
+    const parents = [a, b].map(vault => vault.getItems(id).find(item => item.text === 'Parent')!.id);
+    const loser = parents[0] < parents[1] ? 1 : 0;
+    [a, b][loser].setItemParent(child, parents[loser]);
+    const updates = [a, b].map(vault => Y.encodeStateAsUpdate(vault.doc));
+    for (const vault of [a, b]) for (const update of updates) Y.applyUpdate(vault.doc, update, 'remote');
+    assert.deepEqual(a.getNotes(), b.getNotes());
+    const items = a.getItems(id);
+    assert.equal(items.find(item => item.id === child)!.parentId, items.find(item => item.text === 'Parent')!.id);
+    assert.deepEqual(nativeCommand({ op: 'projection', method: 'capture', doc: Buffer.from(Y.encodeStateAsUpdate(a.doc)).toString('base64'), sourceIds: [id] }), a.captureHistoryState([id]));
+    a.setItemText(items.find(item => item.text === 'Parent')!.id, 'Edited parent'); a.finishEdit();
+    assert.equal(a.getItems(id).find(item => item.id === child)!.parentId, a.getItems(id).find(item => item.text === 'Edited parent')!.id);
+  } finally { a.destroy(); b.destroy(); }
+});

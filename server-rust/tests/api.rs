@@ -113,7 +113,7 @@ impl Socket {
         Self::query(
             s,
             h,
-            &format!("schema={CURRENT_SCHEMA}&protocol=2&vaultId={vault}"),
+            &format!("schema={CURRENT_SCHEMA}&protocol=3&vaultId={vault}"),
         )
         .await
         .unwrap()
@@ -368,11 +368,12 @@ async fn schema_protocol_and_vault_duplicates_reject_before_account_open() {
     let id = identity(&s, "new").await;
     let h = auth("new", Some(&id));
     for query in [
-        format!("protocol=2&vaultId={id}"),
-        format!("schema=old&protocol=2&vaultId={id}"),
-        format!("schema={CURRENT_SCHEMA}&schema={CURRENT_SCHEMA}&protocol=2&vaultId={id}"),
+        format!("protocol=3&vaultId={id}"),
+        format!("schema=old&protocol=3&vaultId={id}"),
+        format!("schema={CURRENT_SCHEMA}&schema={CURRENT_SCHEMA}&protocol=3&vaultId={id}"),
         format!("schema={CURRENT_SCHEMA}&protocol=1&vaultId={id}"),
-        format!("schema={CURRENT_SCHEMA}&protocol=2&protocol=2&vaultId={id}"),
+        format!("schema={CURRENT_SCHEMA}&protocol=2&vaultId={id}"),
+        format!("schema={CURRENT_SCHEMA}&protocol=3&protocol=3&vaultId={id}"),
     ] {
         let Err(tungstenite::Error::Http(r)) = Socket::query(&s, &h, &query).await else {
             panic!("admitted incompatible socket")
@@ -382,7 +383,7 @@ async fn schema_protocol_and_vault_duplicates_reject_before_account_open() {
     let Err(tungstenite::Error::Http(r)) = Socket::query(
         &s,
         &h,
-        &format!("schema={CURRENT_SCHEMA}&protocol=2&vaultId={id}&vaultId={id}"),
+        &format!("schema={CURRENT_SCHEMA}&protocol=3&vaultId={id}&vaultId={id}"),
     )
     .await
     else {
@@ -735,7 +736,7 @@ async fn sixteen_slots_are_account_local_and_close_releases_one() {
     let s = start(dir.path(), json!({})).await;
     let id = identity(&s, "alice").await;
     let h = auth("alice", Some(&id));
-    let query = format!("schema={CURRENT_SCHEMA}&protocol=2&vaultId={id}");
+    let query = format!("schema={CURRENT_SCHEMA}&protocol=3&vaultId={id}");
     let mut sockets = vec![];
     for _ in 0..16 {
         sockets.push(Socket::connect(&s, &h, &id).await);
@@ -851,7 +852,7 @@ async fn password_sessions_protect_blobs_origin_and_persist_until_password_rotat
             &s,
             &bad,
             &format!(
-                "schema={CURRENT_SCHEMA}&protocol=2&vaultId={}",
+                "schema={CURRENT_SCHEMA}&protocol=3&vaultId={}",
                 h["x-stow-vault"].to_str().unwrap()
             )
         )

@@ -5,6 +5,53 @@ use crate::{
 };
 
 #[test]
+fn conversion_mask_projection_authors_no_updates_and_preserves_late_insertions() {
+    use std::sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    };
+    use yrs::{Assoc, IndexedSequence};
+    let doc = new_doc();
+    note(&doc, "a", "A🦀BCD");
+    let Out::YText(body) = map(&doc, "notes", "a")
+        .get(&doc.transact(), "body")
+        .unwrap()
+    else {
+        panic!("missing body")
+    };
+    let id = *body
+        .sticky_index(&doc.transact(), 1, Assoc::After)
+        .unwrap()
+        .id()
+        .unwrap();
+    meta(
+        &doc,
+        "a",
+        "text-mask:conversion",
+        json!({"field":"body","spans":[{"client":id.client.get(),"clock":id.clock,"length":3}]}),
+    );
+    body.insert(&mut doc.transact_mut(), 3, "LATE");
+    let before = doc.transact().snapshot();
+    let before_note = get(&doc.transact(), "notes", "a");
+    let writes = Arc::new(AtomicUsize::new(0));
+    let observed = writes.clone();
+    let _subscription = doc
+        .observe_update_v1(move |_, _| {
+            observed.fetch_add(1, Ordering::SeqCst);
+        })
+        .unwrap();
+    for _ in 0..3 {
+        let state = history_state::capture(&doc, &ids(&["a"])).unwrap();
+        assert_eq!(state["sources"]["a"]["body"], "ALATECD");
+    }
+    assert_eq!(writes.load(Ordering::SeqCst), 0);
+    // Yrs may split an internal string block at a mask boundary, changing its
+    // binary packing. Character identities, deletion state and data must not change.
+    assert_eq!(doc.transact().snapshot(), before);
+    assert_eq!(get(&doc.transact(), "notes", "a"), before_note);
+}
+
+#[test]
 fn snapshots_are_independent_paginated_durable_and_absent_from_current_crdt() {
     let mut f = Fixture::new();
     note(&f.client, "a", "First body");

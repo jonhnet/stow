@@ -80,7 +80,7 @@ with tempfile.TemporaryDirectory(prefix='lab-smoke-', dir=build / 'tmp') as name
         bad = {**report, 'samples': [{'name': 'private note text', 'startMs': 0, 'durationMs': 1}]}
         assert req(prefix + '/api/lab/report', 'POST', bad, h)[0] == 400
         with socket.create_connection(('127.0.0.1', port), timeout=10) as ws:
-            ws.sendall(f'GET {prefix}/sync?schema=stow-current-v1&protocol=2&vaultId={a} HTTP/1.1\r\nHost: localhost:{port}\r\nCookie: stow_lab_user=first%40example.test\r\nOrigin: {origin}\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: {base64.b64encode(os.urandom(16)).decode()}\r\nSec-WebSocket-Version: 13\r\n\r\n'.encode())
+            ws.sendall(f'GET {prefix}/sync?schema=stow-current-v1&protocol=3&vaultId={a} HTTP/1.1\r\nHost: localhost:{port}\r\nCookie: stow_lab_user=first%40example.test\r\nOrigin: {origin}\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: {base64.b64encode(os.urandom(16)).decode()}\r\nSec-WebSocket-Version: 13\r\n\r\n'.encode())
             response = ws.recv(4096)
             assert response.startswith(b'HTTP/1.1 101'), response
         print('Native lab smoke passed: isolated seeded accounts, preferences, authentication, binding, reports, diagnostics, duplicate stages, and WebSocket upgrade.')

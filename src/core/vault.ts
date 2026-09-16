@@ -15,6 +15,8 @@ import type { MergeRecipe, SourceTextRef, TextRef } from './merged-text';
 import { enforcePermanentDeletions, installPermanentDeletionGuard, PERMANENT_DELETION_ORIGIN } from './deletion';
 import { redactEditDraft } from './edit-draft';
 import { assertCurrentSchema } from './current-schema';
+import type { ChecklistConversion } from './converted-checklist';
+import { TEXT_MASK_PREFIX, textMasks, visibleTextRuns, type TextMask } from './converted-text';
 
 type RecordMap = Y.Map<any>;
 const uid = () => globalThis.crypto.randomUUID();
@@ -345,6 +347,9 @@ export class Vault {
     if (!(text instanceof Y.Text)) throw new Error('This note composition refers to a missing editable text field.');
     return text;
   }
+  private textRuns(ref: TextRef) {
+    return visibleTextRuns(this.textField(ref), textMasks(this.notes.get(ref.sourceId)!, ref.field, ref.field === 'join' ? ref.joinId : undefined));
+  }
   private createJoins(values: { sourceId: string; text: string }[]): TextRef[] {
     if (this.active) throw new Error('Joining text must be allocated before its authored note change.');
     const refs = values.map(value => ({ sourceId: value.sourceId, field: 'join' as const, joinId: uid() }));
@@ -370,16 +375,21 @@ export class Vault {
   /** Keep every original field, including empty fields, as an editable CRDT run. */
   private replaceTextRuns(refs: TextRef[], value: string) {
     if (!refs.length) throw new Error('This note composition has no editable text runs.');
-    const runs = refs.map(ref => ({ ref, text: this.textField(ref), value: this.textField(ref).toString(), start: 0 }));
+    const runs = refs.flatMap(ref => {
+      const text = this.textField(ref), masks = textMasks(this.notes.get(ref.sourceId)!, ref.field, ref.field === 'join' ? ref.joinId : undefined);
+      const visible = masks.length ? visibleTextRuns(text, masks) : [{ text, index: 0, value: text.toString() }];
+      return (visible.length ? visible : [{ text: this.textField(ref), index: this.textField(ref).length, value: '' }])
+        .map(run => ({ ...run, ref, start: 0 }));
+    });
     let length = 0;
     for (const run of runs) { run.start = length; length += run.value.length; }
     const patch = textSplice(runs.map(run => run.value).join(''), value);
     const insertion = runs.find(run => patch.index <= run.start + run.value.length) ?? runs[runs.length - 1];
-    for (const run of runs) {
+    for (const run of [...runs].reverse()) {
       const start = Math.max(patch.index, run.start), end = Math.min(patch.index + patch.remove, run.start + run.value.length);
-      if (end > start) { run.text.delete(start - run.start, end - start); this.touch(run.ref.sourceId); }
+      if (end > start) { run.text.delete(run.index + start - run.start, end - start); this.touch(run.ref.sourceId); }
     }
-    if (patch.insert) { insertion.text.insert(patch.index - insertion.start, patch.insert); this.touch(insertion.ref.sourceId); }
+    if (patch.insert) { insertion.text.insert(insertion.index + patch.index - insertion.start, patch.insert); this.touch(insertion.ref.sourceId); }
   }
   private prepareLegacyText(id: string): MergeRecipe | undefined {
     const text = this.projection.text(id); if (!text.needsMaterialization) return;
@@ -515,10 +525,11 @@ export class Vault {
     return labels;
   }
 
-  private insertItem(id: string, noteId: string, text: string, rank: number, parentId?: string) {
+  private insertItem(id: string, noteId: string, text: string, rank: number, parentId?: string, conversion?: ChecklistConversion) {
     const item = new Y.Map(); this.items.set(id, item);
     item.set('noteId', noteId); item.set('text', new Y.Text(text)); item.set('checked', false); item.set('deleted', false);
     item.set('parentId', parentId ?? null); item.set('rank', rank);
+    if (conversion) item.set('conversion', conversion);
     this.notes.get(noteId)!.set('kind', 'checklist'); this.projection.itemChanged(id); this.touch(noteId);
   }
   /** Materialize only as part of an explicit edit, never while opening a vault. */
@@ -576,6 +587,26 @@ export class Vault {
     const lines = note.body.split(/\r\n|\r|\n/).filter(line => line.trim().length > 0);
     if (!lines.length) return false;
     const prepared = this.prepareLegacyText(note.id);
+    const refs = prepared?.body ?? this.projection.text(note.id).bodyRefs;
+    let offset = 0;
+    const runs = refs.flatMap(ref => this.textRuns(ref).map(run => {
+      const start = offset; offset += run.value.length;
+      return { ...run, ref, start, end: offset };
+    }));
+    // Character identities survive insertion of earlier lines and distinguish
+    // intentionally repeated lines. Include both ends of every composed run.
+    const sources = [...note.body.matchAll(/[^\r\n]+/g)].filter(match => match[0].trim()).map(match => {
+      const start = match.index!, end = start + match[0].length;
+      const spans: number[][] = [];
+      for (const run of runs) {
+        const left = Math.max(start, run.start), right = Math.min(end, run.end);
+        if (left >= right) continue;
+        const clock = run.span.clock + left - run.start, previous = spans.at(-1);
+        if (previous?.[0] === run.span.client && previous[1] + previous[2] === clock) previous[2] += right - left;
+        else spans.push([run.span.client, clock, right - left]);
+      }
+      return JSON.stringify(spans);
+    });
     const description = `Note: converted text to ${lines.length} checklist item${lines.length === 1 ? '' : 's'}`;
     this.change(note.sourceIds, { type: 'metadata', noteId: note.id }, description, () => {
       if (prepared) this.saveRecipe(prepared);
@@ -588,9 +619,18 @@ export class Vault {
         ranks = lines.map((_, index) => (index + 1) * 1024);
         roots.forEach((root, index) => this.positionItem(root.id, root.parentId, (lines.length + index + 1) * 1024));
       }
-      lines.forEach((line, index) => this.insertItem(uid(), note.id, line, ranks[index]));
-      // Use the composed text path so conversion also clears a merged note's body.
-      this.setNoteText(note.id, 'body', '');
+      lines.forEach((line, index) => this.insertItem(uid(), note.id, line, ranks[index], undefined,
+        { source: sources[index], text: line, rank: ranks[index] }));
+      // Retain the original CRDT text behind undoable masks. Concurrent Undo
+      // then reveals it once, rather than inserting a new copy on each device.
+      const conversionId = uid();
+      refs.forEach((ref, index) => {
+        const spans = runs.filter(run => run.ref === ref).map(run => run.span);
+        if (!spans.length) return;
+        this.notes.get(ref.sourceId)!.set(`${TEXT_MASK_PREFIX}${conversionId}:${index}`,
+          { field: ref.field, ...(ref.field === 'join' ? { joinId: ref.joinId } : {}), spans } satisfies TextMask);
+        this.touch(ref.sourceId);
+      });
     });
     return true;
   }

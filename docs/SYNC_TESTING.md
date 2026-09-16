@@ -74,11 +74,15 @@ Desktop Playwright does not simulate Android sleep or operating-system process
 eviction. Those still need device testing. SIGKILL tests exercise process death,
 not power-loss behavior of physical disks.
 
-Concurrent body-to-checklist conversion remains an executable TODO in
-`tests/convert-checklist.test.ts`: both devices currently create new items for
-each line. Random workloads exclude simultaneous conversion until that semantic
-bug is fixed; a deterministic schedule covers conversion concurrent with remote
-edits and Undo/Redo. Existing account-isolation, retention, image ownership and
+Concurrent body-to-checklist conversion is covered by ordinary failing-on-error
+regressions, all six reconnect orders with three converters, and browser tests.
+The conversion suite checks repeated source lines, independently edited conflict
+copies, deletion, nesting, merged notes, Unicode, and concurrent Undo/Redo;
+Rust interoperability tests compare the server history projection with the client.
+Random workloads leave conversion to these named schedules because distinct
+edited copies intentionally remain visible, requiring different expectations
+from the general authored-token-exactly-once oracle.
+Existing account-isolation, retention, image ownership and
 storage-failure suites remain part of `npm run check`; this harness does not
 claim to exhaust their Cartesian product.
 

@@ -27,7 +27,8 @@ export function random(seed: number) {
 export const orders = [[0, 1, 2], [0, 2, 1], [1, 0, 2], [1, 2, 0], [2, 0, 1], [2, 1, 0]];
 export function generatedSchedule(seed: number, length = 75): Schedule {
   const choose = random(seed);
-  // Conversion is covered separately: concurrent conversion has an executable TODO.
+  // Conversion conflicts have explicit expectations in the named schedules and
+  // conversion suite (distinct edited copies intentionally remain visible).
   const actions: Action[] = ['append', 'item', 'item-edit', 'attachment', 'check', 'parent', 'cycle', 'merge', 'label', 'delete-label', 'color', 'archive', 'move', 'undo', 'redo', 'deliver', 'deliver', 'partition', 'reconnect', 'reload', 'compact', 'fail-write'];
   const steps: Step[] = Array.from({ length }, (_, id) => ({ id: id + 1, action: actions[choose(actions.length)], actor: choose(3), target: choose(3), value: choose(12) }));
   steps.push({ id: length + 1, actor: 0, action: 'delete' }, { id: length + 2, actor: 2, action: 'late-edit' });

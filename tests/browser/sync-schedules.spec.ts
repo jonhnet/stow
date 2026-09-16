@@ -1,6 +1,36 @@
 import { test, expect } from '@playwright/test';
 import { card, connected, createNote, edit, origin, syncFaults, workerGate } from './support/sync-faults';
 
+test('offline conversions coalesce repeated source lines and survive a fresh browser cache', async ({ page, context, browser }, info) => {
+  const user = `conversion-${info.testId}-${info.repeatEachIndex}@example.test`;
+  const remote = await browser.newContext();
+  try {
+    await Promise.all([context, remote].map(client => client.addCookies([{ name: 'stow_test_user', value: user, url: origin }])));
+    await page.goto(origin); await connected(page); await createNote(page, 'Scheduled note', 'One 🦀\nOne 🦀\nTwo');
+    const peer = await remote.newPage(); await peer.goto(origin); await expect(card(peer)).toContainText('Two'); await connected(peer);
+    await Promise.all([context, remote].map(client => client.setOffline(true)));
+    for (const client of [page, peer]) {
+      await card(client).getByRole('heading', { name: 'Scheduled note', exact: true }).click();
+      await client.getByRole('button', { name: 'More note actions', exact: true }).click();
+      await client.getByRole('button', { name: 'Convert to checklist', exact: true }).click();
+      await expect(client.locator('[data-check-row]')).toHaveCount(3);
+      await client.getByRole('button', { name: 'Close', exact: true }).click();
+    }
+    await Promise.all([context, remote].map(client => client.setOffline(false)));
+    await Promise.all([page, peer].map(connected));
+    const fresh = await browser.newContext();
+    try {
+      await fresh.addCookies([{ name: 'stow_test_user', value: user, url: origin }]);
+      const reader = await fresh.newPage(); await reader.goto(origin); await expect(card(reader)).toBeVisible(); await connected(reader);
+      for (const client of [page, peer, reader]) {
+        await card(client).getByRole('heading', { name: 'Scheduled note', exact: true }).click();
+        await expect.poll(() => client.locator('.item-drag-handle').evaluateAll(handles => handles.map(handle => handle.getAttribute('aria-label')!.slice('Reorder '.length)))).toEqual(['One 🦀', 'One 🦀', 'Two']);
+        const body = client.getByRole('textbox', { name: 'Note text', exact: true }); await body.focus(); await expect(body).toHaveValue('');
+      }
+    } finally { await fresh.close(); }
+  } finally { await remote.close(); }
+});
+
 for (const boundary of ['session', 'sync', 'upload', 'done', 'blackhole'] as const) {
   test(`three devices retain edits across a reconnect interrupted at ${boundary}`, async ({ page, context, browser }, info) => {
     const user = `schedule-${info.testId}-${info.repeatEachIndex}@example.test`;

@@ -1093,7 +1093,7 @@ async fn upgrade(
         return Err(Error::request(409, "Vault identity changed"));
     }
     let pairs: Vec<_> = url::form_urlencoded::parse(uri.query().unwrap_or("").as_bytes()).collect();
-    for (key, value) in [("protocol", "2"), ("schema", CURRENT_SCHEMA)] {
+    for (key, value) in [("protocol", "3"), ("schema", CURRENT_SCHEMA)] {
         let values: Vec<_> = pairs
             .iter()
             .filter(|(k, _)| k == key)
