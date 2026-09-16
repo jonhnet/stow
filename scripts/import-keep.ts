@@ -227,6 +227,7 @@ Options:
   --apply             Upload files and commit the prepared import
   --vault ID          Required with --apply; must equal the authenticated vault
   --backup-dir PATH   Persistent backups (default ../data/import-backups)
+  --staging-dir PATH  Preview location within build/ (default ../build)
   --help              Show this help
 
 Credentials come from STOW_PROXY_SECRET or STOW_PASSWORD, never command arguments.
@@ -238,7 +239,7 @@ export async function main(argv = process.argv.slice(2)) {
   const { values } = parseArgs({ args: argv, options: {
     input: { type: 'string' }, plan: { type: 'string' }, server: { type: 'string' }, user: { type: 'string' },
     'auth-mode': { type: 'string' }, replace: { type: 'boolean' }, apply: { type: 'boolean' }, vault: { type: 'string' },
-    'backup-dir': { type: 'string' }, help: { type: 'boolean' },
+    'backup-dir': { type: 'string' }, 'staging-dir': { type: 'string' }, help: { type: 'boolean' },
   } });
   if (values.help) { console.log(help); return; }
   if (!!values.input === !!values.plan) throw new Error('Supply exactly one of --input or --plan. Use --help for examples.');
@@ -257,8 +258,9 @@ export async function main(argv = process.argv.slice(2)) {
   const client = await ImportClient.open(options);
   try {
     if (!plan) {
-      await mkdir(buildDir, { recursive: true });
-      const workDir = await mkdtemp(path.join(buildDir, 'keep-import-'));
+      const stagingDir = path.resolve(values['staging-dir'] ?? buildDir);
+      await mkdir(stagingDir, { recursive: true });
+      const workDir = await mkdtemp(path.join(stagingDir, 'keep-import-'));
       console.log(json({ event: 'reading-takeout', user: client.account.user, vaultId: client.account.vaultId, staging: workDir }).trim());
       plan = await createImportPlan(client, path.resolve(values.input!), !!values.replace, workDir, server.origin);
       planFilename = path.join(workDir, 'plan.json');

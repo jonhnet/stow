@@ -31,6 +31,10 @@ When nginx is on another machine, allow it to reach Stow's TCP port 3001 over yo
 
 Open `https://stow.example.com`, sign in, and optionally choose **Settings → Install Stow**. No certificate import is needed. Let the first sync finish before trying offline use.
 
+## Import from Google Keep
+
+Follow the [Keep import guide](import-keep.md#import-into-a-self-hosted-podman-installation) from the Stow computer's checkout. The import command uses Podman and your installed configuration; nginx needs no changes.
+
 ## Operate and update
 
 Inspect the service with `sudo systemctl status stow-app` or `sudo journalctl -u stow-app`. After making a backup, update from the checkout:

@@ -1,31 +1,68 @@
 # Import Google Keep
 
-The importer previews a Google Keep Takeout export, then applies a saved plan to one explicitly selected Stow account. It uses the running server's authenticated API and normal durable sync protocol. Run the commands from the source checkout after installing dependencies with `./setup.sh`.
+The importer previews a Google Keep Takeout export, then applies a saved plan to one explicitly selected Stow vault. Existing notes are kept by default.
 
-## Select the source and account
+## Import into a self-hosted Podman installation
 
-Use a `.tgz`, `.tar.gz`, or extracted directory containing Keep's JSON notes and their referenced files. Extract ZIP exports first. For a Takeout export containing several Google products, select the extracted `Takeout/Keep` directory; every JSON file in the selected input is treated as a Keep note. Preserve the relative paths between notes and attachments.
+These commands work with both the [home](HOME_HOSTING.md) and [internet](INTERNET_HOSTING.md) installations. Run them on the computer running Stow, from the source checkout. Keep Stow running. Only the hosting prerequisites are needed; the command builds a temporary import container with its own dependencies.
 
-`import-keep.sh` loads the private workspace `.env` (`../.env` relative to the checkout). Credentials come from `STOW_PROXY_SECRET` or `STOW_PASSWORD`, never command arguments. Values assigned in `.env` override matching values already exported in the shell.
+Export only **Keep** at [Google Takeout](https://takeout.google.com), then copy the download to this computer, outside `stow-git` and `build`. Use a `.tgz`, `.tar.gz`, or extracted `Takeout/Keep` directory. Keep images and other attachments beside their JSON notes. If the export includes other Google products, select only the extracted `Takeout/Keep` directory.
 
-For a server using proxy authentication, configure `STOW_AUTH_MODE=proxy` and the server's `STOW_PROXY_SECRET` in that file. Supply the exact stable identity normally sent by the authenticating proxy:
+After making a backup as described in your hosting guide, update Stow so the server and importer use the same version. Then preview the import, replacing the input path:
+
+```sh
+git pull --ff-only
+sudo ./self-host.py
+sudo ./import-keep-podman.py --input /path/to/takeout.tgz
+```
+
+For a ZIP export, extract it first using Python, which the hosting setup already installed:
+
+```sh
+python3 -m zipfile -e /path/to/takeout.zip ../takeout
+sudo ./import-keep-podman.py --input ../takeout/Takeout/Keep
+```
+
+Preview changes no notes and uploads no files. Review the note counts and warnings, then use the exact `plan` filename and `vaultId` it prints:
+
+```sh
+sudo ./import-keep-podman.py --plan /path/printed/by/preview/plan.json \
+  --apply --vault VAULT_ID_FROM_PREVIEW
+```
+
+Open Stow at your usual HTTPS URL to see the imported notes. After an interruption, retry that same apply command; a completed plan is not imported twice.
+
+The command reads the installed password from `/var/lib/stow/stow.env` and connects through the running application container's private network namespace. The same command works behind nginx and with home certificates; no URL, certificate import, or password copy is needed. It uses the authenticated API and does not mount or edit the server's live notes directory.
+
+Saved plans and staged input remain under `../build/keep-import-stow/` on the host. Keep them until the operation is complete. Before applying, the importer saves a persistent backup beneath `/var/lib/stow/import-backups/`. Keep the original Takeout export independently of `build`; deleting build files removes saved plans but does not remove Stow notes or these backups.
+
+If you installed with a custom name and state directory, keep supplying `--name` and `--state-dir` to `self-host.py`, and `--state-dir` to every import command; the importer reads the service name from its settings. `--build-network host` is available for machines that needed it during hosting setup. To intentionally replace existing notes, add `--replace` to the preview command and read [replacement behavior](#append-replace-and-retry) first.
+
+Takeout import requires no Google credentials. Takeout omits checklist nesting, so imported checklists are flat; text and checked states are retained. Restore nesting manually or use the limited [saved-page recovery tool](restore-keep-indentation.md).
+
+## Development and other server installations
+
+The direct `import-keep.sh` client requires the [development prerequisites](../CONTRIBUTING.md), including Node.js, Rust, and ImageMagick. Run `./setup.sh` first. It can import into a local or remote server through HTTP and WebSockets.
+
+`import-keep.sh` loads the private workspace `.env` (`../.env` relative to the checkout) as shell settings. Credentials come from `STOW_PROXY_SECRET` or `STOW_PASSWORD`, never command arguments. File values override matching exported shell variables. The Podman wrapper above instead reads the installer's literal env file; do not copy or source that file as shell code.
+
+For a single personal vault, configure `STOW_AUTH_MODE=password` and `STOW_PASSWORD` in the workspace `.env`, then run:
+
+```sh
+./import-keep.sh --input /path/to/Takeout/Keep \
+  --auth-mode password --server https://stow.example.com
+```
+
+An nginx TLS proxy does not change the authentication mode: both `self-host.py` hosting paths use the Stow password. For a server deliberately configured with multi-user proxy authentication, set `STOW_AUTH_MODE=proxy` and `STOW_PROXY_SECRET`, and supply the exact stable identity normally sent by that authenticating proxy:
 
 ```sh
 ./import-keep.sh --input /path/to/takeout.tgz \
   --auth-mode proxy --user 'your-proxy-identity'
 ```
 
-For a single personal vault, configure `STOW_AUTH_MODE=password` and `STOW_PASSWORD`, then run:
-
-```sh
-./import-keep.sh --input /path/to/Takeout/Keep --auth-mode password
-```
-
-Takeout import requires no Google credentials. Checklist imports report `checklist-hierarchy-unavailable-in-takeout` because Takeout omits nesting. Checklist text and checked states are retained; parent-child relationships require manual indentation in Stow or the limited [saved-page recovery tool](restore-keep-indentation.md).
-
 The backend defaults to `http://127.0.0.1:3001`. Use `--server https://stow.example.com` or another backend root URL when needed. The destination must accept the selected authentication mode for both HTTP and WebSockets. Proxy mode requires its private proof and user identity; password login is attempted only after a password-mode session response. Redirects and account mismatches stop the import.
 
-## Preview and apply
+### Preview and apply with the direct client
 
 The commands above append notes. Add `--replace` when creating the preview to discard the account's existing note sources:
 
@@ -91,7 +128,7 @@ Takeout omits checklist nesting. A saved copy of the live Keep page can retain e
 
 ## Backups and recovery
 
-Before an unapplied operation uploads files or changes notes, the importer saves a directory beneath `../data/import-backups/<vault-id>/` containing:
+Before an unapplied operation uploads files or changes notes, the importer saves a backup directory. The Podman command uses `/var/lib/stow/import-backups/<vault-id>/` (or your custom state directory); the direct client defaults to `../data/import-backups/<vault-id>/`. Each backup contains:
 
 - `before.yjs`: the synchronized current-state CRDT.
 - `before-notes.json`: the materialized notes for inspecting or recovering content.
@@ -100,7 +137,7 @@ Before an unapplied operation uploads files or changes notes, the importer saves
 - `import-plan.json`: the reviewed operation.
 - `result.json`: completion details, written after a successful apply.
 
-Use `--backup-dir /persistent/path/import-backups` to select a different location. Backups must remain outside the source checkout and disposable `build/`. The default is the workspace's `data/import-backups`, independent of a custom server `DATA_DIR`; choose an explicitly persistent location for containers or remote-server administration. These files contain private note content. A history export failure, missing original, or mismatched hash stops the import before uploads or note changes. Maintain a [complete server data backup](../README.md#back-up-and-restore) as well; it also preserves account identity, server settings, and originals retained solely for an existing note's local Undo stack.
+The direct client accepts `--backup-dir /persistent/path/import-backups` for a different location; its default is independent of the server's `DATA_DIR`. Backups must remain outside the source checkout and disposable `build/`. These files contain private note content. A history export failure, missing original, or mismatched hash stops the import before uploads or note changes. Maintain a [complete server data backup](../README.md#back-up-and-restore) as well; it also preserves account identity, server settings, and originals retained solely for an existing note's local Undo stack.
 
 These snapshots are recovery material, not an automatic rollback. Merging `before.yjs` into the current document will not undo CRDT deletion records. Recover wanted content as new notes with fresh identities. Replacing server files from a backup also requires the device-state considerations described in the general backup documentation; reconnecting replicas can carry later changes.
 

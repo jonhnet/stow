@@ -34,9 +34,9 @@ Run the [internet setup](docs/INTERNET_HOSTING.md) to put Stow behind your exist
 
 Open your HTTPS URL, sign in, and optionally install the PWA. Devices sync wherever they have internet access; no per-device certificate installation is needed.
 
-## bulk import from Keep Takeout
+## Bulk import from Keep Takeout
 
-Follow the [Keep import guide](docs/import-keep.md) to import notes, checklists, labels, and images from a Google Keep Takeout export. The importer lets you preview the changes before applying them to your Stow vault.
+Follow the [Keep import guide](docs/import-keep.md) to import notes, checklists, labels, and images from a Google Keep Takeout export. Both self-hosting setups include a Podman import command that previews changes before applying them; no development tools are needed on the host.
 
 ## Back up and restore
 

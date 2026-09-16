@@ -16,6 +16,7 @@ import time
 import urllib.error
 import urllib.request
 import uuid
+from keep_import import check_import
 
 SOURCE = Path(__file__).resolve().parents[2]
 BUILD = SOURCE.parent / 'build'
@@ -186,6 +187,7 @@ def main():
         with (log_dir / 'browser-build.log').open('w') as log:
             run(*build, '.', cwd=checkout, stdout=log, stderr=subprocess.STDOUT)
         browser('seed')
+        check_import(checkout, state, log_dir, args.mode, args.build_network, request, trust, authenticated, vault)
         retained = ['stow.env', 'notes/session-secret']
         if not proxy:
             retained += ['tls/caddy/pki/authorities/local/root.crt', 'tls/caddy/pki/authorities/local/root.key']

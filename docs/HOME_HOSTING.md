@@ -42,6 +42,10 @@ On a computer, import `stow-ca.crt` as a trusted certificate authority in the br
 
 Then open the printed **HTTPS** URL in Chrome and sign in. There should be no certificate warning. In Stow, choose **Settings → Install Stow** when offered, or use Chrome's install menu. Let the first sync finish before testing offline use. Away from home, cached notes remain editable and sync when you return.
 
+## Import from Google Keep
+
+Follow the [Keep import guide](import-keep.md#import-into-a-self-hosted-podman-installation) from this computer's checkout. The import command uses Podman and your installed configuration; no additional development tools or certificate setup are needed.
+
 ## Operate and update
 
 From any directory:

@@ -79,6 +79,15 @@ try {
     await waitFor(() => note().textContent().then(value => value.includes('Offline edit survives')), 'Offline startup lost the pending edit');
     await context.setOffline(false);
     await connected();
+    const imported = page.getByRole('article', { name: 'Open note: Imported Keep note', exact: true });
+    await imported.waitFor();
+    assert.equal(await imported.count(), 1);
+    assert((await imported.textContent()).includes('Takeout body with *literal stars* and 日本語'));
+    assert((await imported.textContent()).includes('From Keep'));
+    await waitFor(() => imported.locator('img').evaluateAll(images => images.length === 1 && images.every(image => image.complete && image.naturalWidth > 0)), 'Imported image thumbnail did not load');
+    const checklist = page.getByRole('article', { name: 'Open note: Imported Keep checklist', exact: true });
+    assert.equal(await checklist.count(), 1);
+    assert((await checklist.textContent()).includes('Buy milk'));
     const peer = await context.browser().newContext();
     const other = await peer.newPage();
     await other.goto(origin);

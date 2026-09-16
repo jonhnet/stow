@@ -16,6 +16,21 @@ COPY Cargo.toml Cargo.lock ./
 COPY server-rust ./server-rust
 RUN cargo build --locked --release --bin stow-server
 
+FROM docker.io/library/node:22-bookworm-slim AS importer
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends imagemagick ca-certificates \
+    && rm -rf /var/lib/apt/lists/* \
+    && mkdir -p /stow/build/tmp
+ARG STOW_IMPORT_WORKSPACE=/stow
+# Podman 4.9 keys RUN caches on build arguments; COPY/WORKDIR alone do not.
+RUN mkdir -p "$STOW_IMPORT_WORKSPACE/stow-git"
+WORKDIR ${STOW_IMPORT_WORKSPACE}/stow-git
+COPY --from=frontend /stow/build/node_modules ../node_modules
+COPY --from=frontend /stow/stow-git .
+COPY --from=backend /stow/build/cargo-target/release/stow-server /usr/local/bin/stow-server
+ENV STOW_SERVER_BIN=/usr/local/bin/stow-server TMPDIR=/stow/build/tmp
+ENTRYPOINT ["node", "--import", "tsx", "scripts/import-keep.ts"]
+
 FROM docker.io/library/debian:bookworm-slim
 RUN apt-get update \
     && apt-get install -y --no-install-recommends imagemagick curl ca-certificates \
