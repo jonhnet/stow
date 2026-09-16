@@ -63,6 +63,24 @@ class Setup(unittest.TestCase):
             (self.unit_dir / name).write_text(text)
         return settings
 
+    def test_container_receives_running_checkout_revision_without_git_directory(self):
+        def git(*args):
+            return subprocess.check_output(['git', '-C', str(self.source), *args], text=True, stderr=subprocess.PIPE).strip()
+        git('init')
+        git('add', '.')
+        git('-c', 'user.name=Build test', '-c', 'user.email=build@example.test', 'commit', '-m', 'fixture')
+        metadata = json.loads(hosting.checkout_build_info())
+        self.assertEqual(metadata['commit'], git('rev-parse', 'HEAD'))
+        self.assertEqual(metadata['committedAt'], git('show', '-s', '--format=%cI', 'HEAD'))
+        self.assertFalse(metadata['dirty'])
+        (self.source / 'changed').write_text('modified')
+        metadata = hosting.checkout_build_info()
+        self.assertTrue(json.loads(metadata)['dirty'])
+        with patch.object(hosting, 'checkout_build_info', return_value=metadata):
+            calls = self.invoke()
+        build = next(call for call in calls if call[:2] == ('podman', 'build'))
+        self.assertIn('STOW_BUILD_INFO=' + metadata, build)
+
     def invoke(self, *, fail_build=False, fail_ready=False):
         calls = []
 

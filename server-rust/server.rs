@@ -568,6 +568,17 @@ fn json_response(status: u16, value: Value) -> Response {
     )
         .into_response()
 }
+
+const SYNC_PROTOCOL: &str = "3";
+
+fn client_update_required() -> Value {
+    json!({
+        "code": "client_update_required",
+        "message": "This version of Stow can no longer sync with the server. Reload Stow to update. Your locally saved edits will be kept.",
+        "action": "reload",
+        "target": format!("{CURRENT_SCHEMA}/{SYNC_PROTOCOL}")
+    })
+}
 fn set_header(response: &mut Response, key: &'static str, value: &str) {
     if let Ok(value) = HeaderValue::from_str(value) {
         response.headers_mut().insert(key, value);
@@ -616,7 +627,21 @@ async fn handle_http(
     }
     if path == "/api/session" && read {
         let mut response = match state.authenticate(&headers) {
-            Ok(p) => json_response(200, state.session(&p)),
+            Ok(p) => {
+                let mut value = state.session(&p);
+                // Browsers cannot read a rejected WebSocket handshake's body.
+                // Return its actionable reason during authenticated preflight,
+                // before opening any account storage. Headerless callers only
+                // request identity; WebSocket admission still checks versions.
+                if (headers.contains_key("x-stow-sync-protocol")
+                    || headers.contains_key("x-stow-schema"))
+                    && (single_header(&headers, "x-stow-sync-protocol") != Some(SYNC_PROTOCOL)
+                        || single_header(&headers, "x-stow-schema") != Some(CURRENT_SCHEMA))
+                {
+                    value["syncRejection"] = client_update_required();
+                }
+                json_response(200, value)
+            }
             Err(e) => {
                 let proxy = state.config.auth_mode == AuthMode::Proxy;
                 let status = if proxy {
@@ -1093,16 +1118,17 @@ async fn upgrade(
         return Err(Error::request(409, "Vault identity changed"));
     }
     let pairs: Vec<_> = url::form_urlencoded::parse(uri.query().unwrap_or("").as_bytes()).collect();
-    for (key, value) in [("protocol", "3"), ("schema", CURRENT_SCHEMA)] {
+    for (key, value) in [("protocol", SYNC_PROTOCOL), ("schema", CURRENT_SCHEMA)] {
         let values: Vec<_> = pairs
             .iter()
             .filter(|(k, _)| k == key)
             .map(|(_, v)| v.as_ref())
             .collect();
         if values != [value] {
-            return Err(Error::request(
+            let notice = client_update_required();
+            return Ok(json_response(
                 426,
-                "Incompatible sync protocol or vault schema; reload Stow.",
+                json!({"error": notice["message"], "syncRejection": notice}),
             ));
         }
     }

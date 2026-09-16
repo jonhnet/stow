@@ -38,6 +38,14 @@ STOW_PASSWORD='choose-a-long-password' npm start
 
 The build produces `../build/cargo-target/release/stow-server` and `../build/dist/`. The server serves the browser bundle, API, and WebSocket sync from one origin, defaulting to `http://localhost:3001`. Node.js is needed for the browser build and import tools, but not for the production server. The native server needs ImageMagick and its supported image codecs.
 
+Settings displays the running browser bundle's commit hash and commit date (UTC),
+with a modified marker for a dirty checkout. Vite embeds these at build time;
+an old tab therefore identifies its own code. `git archive` exports the same
+metadata through `build-version.json` and `.gitattributes`, without shipping
+`.git`. `self-host.py` passes it into the container build. For a direct container
+build from a checkout, supply `--build-arg STOW_BUILD_INFO='{"commit":"<full Git hash>","committedAt":"<ISO commit date>","dirty":false}'`.
+Source copies without Git or substituted archive metadata display “unversioned”.
+
 For a separately installed executable, explicitly configure `DATA_DIR` and `STOW_STATIC_DIR`; their defaults refer to the workspace where the executable was compiled. The [Podman image](PODMAN.md) sets these paths inside the container.
 
 ## Environment variables

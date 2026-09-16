@@ -1,6 +1,7 @@
 import { SyncTransfer, TransferError, unpackSync } from './sync-transfer';
 import { SYNC_PROTOCOL_VERSION } from './protocol-version';
 import { CURRENT_SCHEMA } from './current-schema';
+import { IdleUpdateReload, parseSyncRejection, type SyncRejection } from './client-update';
 import { useSyncExternalStore } from 'react';
 import * as Y from 'yjs';
 import { LocalPersistence } from './persistence';
@@ -22,6 +23,7 @@ interface Snapshot {
   error: string | null; historyError: string | null; accessMessage: string | null;
   canUndo: boolean; canRedo: boolean; pending: number; localPending: number;
   images: ImageProgress;
+  syncRejection: SyncRejection | null; automaticReload: boolean;
 }
 class SessionError extends Error {
   constructor(message: string, readonly authMode?: AuthMode, readonly locked = false) { super(message); }
@@ -57,6 +59,9 @@ class StowStore {
   private socket?: WebSocket;
   private transfer?: SyncTransfer;
   private syncStopped = false;
+  private syncRejection: SyncRejection | null = null;
+  private updateReload?: IdleUpdateReload;
+  private composing = false;
   private lastUpload: Promise<void> = Promise.resolve();
   private historyRequests = new Set<Promise<void>>();
   private retry?: ReturnType<typeof setTimeout>;
@@ -77,6 +82,8 @@ class StowStore {
   private parked = false;
 
   constructor() {
+    window.addEventListener('compositionstart', () => { this.composing = true; }, true);
+    window.addEventListener('compositionend', () => { this.composing = false; }, true);
     this.refresh();
     this.vault.onHistoryBoundary(boundary => {
       // These are disposable hints, never an offline upload queue. Current edits
@@ -105,6 +112,7 @@ class StowStore {
       this.vault.finishEdit();
       this.flushReplication();
       this.parked = true;
+      this.updateReload?.stop();
       this.access = 'opening'; this.ready = false;
       this.closeSocket(); this.channel?.close(); this.channel = undefined;
       clearTimeout(this.retry); clearTimeout(this.imageTimer);
@@ -168,6 +176,7 @@ class StowStore {
       user: visible ? this.account?.user : undefined, accessMessage: this.accessMessage,
       error: this.localError ?? this.imageError ?? this.error, historyError: visible ? this.historyError : null,
       canReload: this.localPending === 0 && this.imageWrites === 0 && !this.localError,
+      syncRejection: this.syncRejection, automaticReload: this.updateReload?.automatic ?? false,
       canUndo: visible && this.vault.undoManager.undoStack.length > 0,
       canRedo: visible && this.vault.undoManager.redoStack.length > 0,
       pending: this.requests.size + this.localPending, localPending: this.localPending,
@@ -198,6 +207,7 @@ class StowStore {
   }
 
   private block(message: string) {
+    this.updateReload?.stop(); this.updateReload = undefined; this.syncRejection = null;
     this.vault.finishEdit();
     this.access = 'blocked';
     this.accessMessage = message;
@@ -212,10 +222,10 @@ class StowStore {
     this.refresh();
   }
 
-  private async session(): Promise<Account> {
+  private async session(): Promise<{ account: Account; rejection: SyncRejection | null }> {
     startupMark('session-start');
     let response: Response;
-    try { response = await fetch('/api/session', { cache: 'no-store', redirect: 'manual', signal: AbortSignal.any([this.accountAbort.signal, AbortSignal.timeout(10000)]) }); }
+    try { response = await fetch('/api/session', { cache: 'no-store', redirect: 'manual', headers: { 'X-Stow-Sync-Protocol': SYNC_PROTOCOL_VERSION, 'X-Stow-Schema': CURRENT_SCHEMA }, signal: AbortSignal.any([this.accountAbort.signal, AbortSignal.timeout(10000)]) }); }
     catch { throw new NetworkError('Could not reach the server.'); }
     startupMark('session-response');
     startupCount('sessionStatus', response.status);
@@ -232,7 +242,7 @@ class StowStore {
     try { value = await response.json(); }
     catch { throw new SessionError('The server returned an invalid session. Check the authentication proxy, then reload Stow.'); }
     startupMark('session-json');
-    const payload = value as { authenticated?: unknown; required?: unknown; authMode?: unknown; error?: unknown } | null;
+    const payload = value as { authenticated?: unknown; required?: unknown; authMode?: unknown; error?: unknown; syncRejection?: unknown } | null;
     const authMode = payload?.authMode === 'proxy' || payload?.authMode === 'password' ? payload.authMode : undefined;
     if (!response.ok) throw new SessionError(authMode === 'proxy' ? 'The proxy did not provide a trusted user identity. Sign in through the proxy, then reload Stow.' : 'The server could not verify your account. Reload after signing in.', authMode, response.status === 401 || response.status === 403);
     if (!payload || typeof payload.authenticated !== 'boolean' || typeof payload.required !== 'boolean' || !authMode) throw new SessionError('The server returned an invalid session. Reload after checking the server configuration.');
@@ -241,7 +251,7 @@ class StowStore {
       const account = parseAccount(value);
       startupAccount(account.vaultId);
       startupMark('account-verified');
-      return account;
+      return { account, rejection: parseSyncRejection(payload.syncRejection) };
     }
     catch (error) { throw new SessionError((error as Error).message, authMode); }
   }
@@ -346,7 +356,7 @@ class StowStore {
     this.connecting = true;
     try {
       // Every reconnect verifies identity before it can upload the existing document.
-      const account = await this.session();
+      const { account, rejection } = await this.session();
       if (this.accountAbort.signal.aborted || this.parked) return;
       this.authMode = account.authMode;
       if (this.account && this.account.vaultId !== account.vaultId) {
@@ -355,6 +365,12 @@ class StowStore {
         return;
       }
       rememberAccount(account);
+      if (rejection) {
+        // Authenticate first, but do not open an incompatible cached vault on
+        // startup. An already open vault keeps its local writer and offline edits.
+        this.rejectSync(account, rejection);
+        return;
+      }
       if (!this.account) {
         // The session is now verified, including after the password form unlocks
         // a fresh browser. Account stores must initialize outside the locked state.
@@ -371,7 +387,7 @@ class StowStore {
         onFailure: error => {
           if (this.socket !== socket || this.access !== 'ready') return;
           this.error = error.message;
-          if (error.code === 'limit' || error.code === 'invalid') this.syncStopped = true;
+          if (error.code === 'limit' || error.code === 'invalid') this.rejectSync(account, { code: error.code, message: error.message, action: 'none', target: 'sync-transfer' });
           this.status = 'error'; this.refresh();
         },
         onMessage: async (kind, data) => {
@@ -417,8 +433,8 @@ class StowStore {
       socket.onclose = event => {
         if (this.socket !== socket) { transfer.close(); return; }
         if (event.code === 1008 || event.code === 1009) {
-          this.syncStopped = true;
           this.error ??= 'Sync requires an updated client or a smaller vault. Your local edits remain on this device.';
+          this.rejectSync(account, { code: String(event.code), message: this.error, action: 'none', target: 'sync-transfer' });
         }
         this.socket = undefined; this.transfer = undefined; this.historyBoundaries = []; this.historyRequests.clear(); transfer.close();
         this.status = this.syncStopped ? 'error' : 'offline'; this.refresh();
@@ -464,6 +480,21 @@ class StowStore {
     this.retryDelay = Math.min(this.retryDelay * 1.7, 30000);
   }
 
+  private rejectSync(account: Account, rejection: SyncRejection) {
+    if (!this.account) { this.access = 'opening'; this.accessMessage = null; }
+    this.syncStopped = true; clearTimeout(this.retry);
+    this.closeSocket(); this.status = 'error';
+    this.syncRejection = rejection;
+    this.updateReload?.stop(); this.updateReload = undefined;
+    if (rejection.action === 'reload') this.updateReload = new IdleUpdateReload(account.vaultId, rejection.target, {
+      safe: () => !this.parked && !this.composing && this.access !== 'blocked' && this.access !== 'locked' && this.localPending === 0 && this.imageWrites === 0 && !this.localError,
+      save: () => this.saveBeforeReload(),
+      reload: () => location.reload(),
+      failed: () => this.refresh(),
+    });
+    this.refresh();
+  }
+
   async setHistoryCompression(enabled: boolean): Promise<VaultStorage> {
     await this.whenSynchronized();
     return this.storageRequest('/api/history-retention/compression', 'PUT', { enabled });
@@ -476,14 +507,22 @@ class StowStore {
     await this.connect();
   }
 
-  async reloadAccount() {
+  private async saveBeforeReload() {
     try {
       this.vault.finishEdit();
       this.flushReplication();
       if (this.persistence) await this.persistence.whenDurable();
-      if (this.imageWrites) throw new Error('Wait for the image to finish saving on this device.');
-      location.reload();
-    } catch { this.localError = 'Local storage failed. Export your notes before leaving this tab.'; this.refresh(); }
+    } catch (error) {
+      this.localError = 'Local storage failed. Export your notes before leaving this tab.'; this.refresh(); throw error;
+    }
+  }
+
+  async reloadAccount() {
+    if (this.updateReload) { await this.updateReload.attempt(); return; }
+    try {
+      await this.saveBeforeReload();
+      if (this.localPending === 0 && this.imageWrites === 0 && !this.localError) location.reload();
+    } catch { /* saveBeforeReload reports the failure and retains local edits. */ }
   }
 
   private requireAccount() {

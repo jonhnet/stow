@@ -3,6 +3,7 @@ import react from '@vitejs/plugin-react';
 import path from 'node:path';
 import { buildDir, defaultDataDir, distDir, sourceDir, workspaceDir } from './paths.ts';
 import { devHttpDiagnostics } from './scripts/dev-http-diagnostics.ts';
+import { buildInfo } from './scripts/build-info.ts';
 const publicOrigin = process.env.STOW_ORIGIN ? new URL(process.env.STOW_ORIGIN) : undefined;
 const dataDir = path.resolve(process.env.DATA_DIR ?? defaultDataDir);
 if (dataDir === sourceDir || dataDir.startsWith(`${sourceDir}${path.sep}`)) {
@@ -12,6 +13,7 @@ if (dataDir === buildDir || dataDir.startsWith(`${buildDir}${path.sep}`)) {
   throw new Error('DATA_DIR must be outside build/; that directory contains disposable artifacts.');
 }
 export default defineConfig({
+  define: { __STOW_BUILD__: JSON.stringify(buildInfo(sourceDir)) },
   root: sourceDir,
   envDir: workspaceDir,
   cacheDir: path.join(buildDir, 'vite'),

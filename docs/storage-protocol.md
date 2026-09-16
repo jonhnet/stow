@@ -40,6 +40,26 @@ projection and Rust history capture apply these rules without writing repairs.
 
 WebSocket admission requires both `protocol=3` and `schema=stow-current-v1`, plus the exact verified `vaultId`. Rejection happens before opening account data. Password/proxy authentication, private proxy proof, incarnation reset, origin rules, and account-scoped HTTP headers remain required.
 
+Browsers send `X-Stow-Sync-Protocol` and `X-Stow-Schema` on the authenticated
+`/api/session` check. An incompatible client receives the verified account plus
+`syncRejection: {code, message, action, target}`; WebSocket HTTP 426 responses
+carry the same rejection. The session channel is necessary because browser
+WebSocket APIs hide rejected handshake bodies. Headerless identity-only callers
+remain supported, but cannot bypass WebSocket admission. Authentication and
+account changes take priority over update handling.
+
+`action: "reload"` leaves a persistent notice and stops sync. The client reloads
+after five seconds of inactivity in a visible page, with no active input
+composition, pending local note/image writes, or local storage failure. It
+finishes the edit, awaits IndexedDB durability, then rechecks activity and safety
+before navigation. This preserves offline content without waiting for a server
+acknowledgment. It does not retain the in-memory Undo stack. One automatic attempt
+per account and required target is recorded in sessionStorage; a still-rejected
+bundle keeps the notice and a manual Reload button instead of looping. Storage
+failure prevents automatic navigation. `action: "none"` surfaces the rejection
+without scheduling a reload. Clients predating this handling still need a manual
+reload to install it.
+
 All messages use `SyncTransfer`: JSON control frames (`begin`, receipts, `done`, failure) and ordered binary chunks, each with an eight-byte transfer-ID/offset prefix. SHA-256 validates a complete logical unit before application. Chunk receipts grant flow-control credit; `done` follows fsync on the server or IndexedDB commit in the browser. Lost acknowledgments replay safely through Yjs idempotence.
 
 Client-initiated failure closes use application codes 4008 (invalid), 4009 (limit), and 4013 (retry/storage), which the browser WebSocket API permits. Server-initiated closes may use standard codes 1008/1009/1013. A retryable client failure must actually close the socket so the store can reconnect.

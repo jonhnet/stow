@@ -1,6 +1,8 @@
 FROM docker.io/library/node:22-bookworm-slim AS frontend
 ENV npm_config_cache=/stow/build/npm-cache
 WORKDIR /stow/stow-git
+ARG STOW_BUILD_INFO
+ENV STOW_BUILD_INFO=$STOW_BUILD_INFO
 COPY . .
 RUN mkdir -p /stow/build/tmp \
     && cp package.json package-lock.json /stow/build/ \

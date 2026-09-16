@@ -140,3 +140,13 @@
 .editor-toolbar{position:relative}
 .editor-toolbar :is(.palette-anchor,.label-control){position:static}
 .editor-toolbar :is(.color-picker,.label-picker){left:auto;right:0}
+
+.settings-build{display:flex;flex-direction:column;gap:4px;padding:8px 16px;font-size:12px;color:#666b70;border-bottom:1px solid #e3e5e7;user-select:text}
+.settings-build code{font-size:12px;color:#303235}
+.settings-build time{font-size:11px}
+.server-notice{max-width:min(600px,calc(100vw - 48px));align-items:center;z-index:110}
+.server-notice p{margin:0;overflow-wrap:anywhere}
+.server-notice .server-notice-status{margin-top:8px;font-size:13px;opacity:.85}
+.server-notice>button{flex-shrink:0;color:inherit;border:1px solid currentColor;border-radius:6px;padding:8px 12px;background:transparent;cursor:pointer}
+.server-notice>button:disabled{opacity:.5;cursor:default}
+@media(max-width:620px){.server-notice{max-width:calc(100vw - 24px)}}

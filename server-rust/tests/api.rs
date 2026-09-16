@@ -367,6 +367,41 @@ async fn schema_protocol_and_vault_duplicates_reject_before_account_open() {
     let s = start(dir.path(), json!({})).await;
     let id = identity(&s, "new").await;
     let h = auth("new", Some(&id));
+    let mut preflight = h.clone();
+    preflight.insert("x-stow-sync-protocol", "2".parse().unwrap());
+    preflight.insert("x-stow-schema", CURRENT_SCHEMA.parse().unwrap());
+    let response = request(&s, "GET", "/api/session", &preflight, vec![]).await;
+    assert_eq!(response.status, 200);
+    assert_eq!(response.json()["vaultId"], id);
+    let rejection = response.json()["syncRejection"].clone();
+    assert_eq!(rejection["code"], "client_update_required");
+    assert_eq!(rejection["action"], "reload");
+    assert_eq!(rejection["target"], format!("{CURRENT_SCHEMA}/3"));
+    assert!(
+        rejection["message"]
+            .as_str()
+            .unwrap()
+            .contains("Reload Stow")
+    );
+    assert_eq!(response.headers["cache-control"], "no-store");
+    preflight.insert("x-stow-sync-protocol", "3".parse().unwrap());
+    assert!(
+        request(&s, "GET", "/api/session", &preflight, vec![])
+            .await
+            .json()["syncRejection"]
+            .is_null()
+    );
+    preflight.append("x-stow-sync-protocol", "3".parse().unwrap());
+    assert_eq!(
+        request(&s, "GET", "/api/session", &preflight, vec![])
+            .await
+            .json()["syncRejection"],
+        rejection
+    );
+    preflight.remove("x-stow-proxy-secret");
+    let unauthenticated = request(&s, "GET", "/api/session", &preflight, vec![]).await;
+    assert_eq!(unauthenticated.status, 401);
+    assert!(unauthenticated.json()["syncRejection"].is_null());
     for query in [
         format!("protocol=3&vaultId={id}"),
         format!("schema=old&protocol=3&vaultId={id}"),
@@ -379,6 +414,8 @@ async fn schema_protocol_and_vault_duplicates_reject_before_account_open() {
             panic!("admitted incompatible socket")
         };
         assert_eq!(r.status(), 426);
+        let body: Value = serde_json::from_slice(r.body().as_ref().unwrap()).unwrap();
+        assert_eq!(body["syncRejection"], rejection);
     }
     let Err(tungstenite::Error::Http(r)) = Socket::query(
         &s,

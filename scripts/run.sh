@@ -24,8 +24,8 @@ case "$task" in
     tsc --noEmit
     vite build
     node --import tsx --test tests/sync-schedule.test.ts tests/sync-crash.test.ts tests/sync-transfer.test.ts tests/sync-reducer.test.ts
-    playwright test sync-schedules.spec.ts "$@"
-    if [ -z "${STOW_TEST_BROWSER:-}" ]; then STOW_TEST_BROWSER=firefox playwright test sync-schedules.spec.ts "$@"; fi
+    playwright test sync-schedules.spec.ts client-update.spec.ts "$@"
+    if [ -z "${STOW_TEST_BROWSER:-}" ]; then STOW_TEST_BROWSER=firefox playwright test sync-schedules.spec.ts client-update.spec.ts "$@"; fi
     ;;
   browsers:install) exec playwright install chromium "$@" ;;
   *) printf 'Unknown task: %s\n' "$task" >&2; exit 1 ;;

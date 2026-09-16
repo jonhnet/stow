@@ -1,5 +1,11 @@
 # Offline and reconnect tests
 
+`tests/browser/client-update.spec.ts` also runs in Chromium and Firefox in normal
+CI. It checks real server compatibility rejections, held and failed local writes,
+active composition, idle reloads, retained offline edits, account changes, reload
+loop prevention, and a persistent notice in a phone-sized viewport. Unit tests
+cover input arriving during the durability flush and unavailable reload guards.
+
 Run the focused suite against the production UI build and disposable Rust servers:
 
 ```sh

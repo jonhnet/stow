@@ -43,6 +43,19 @@ def run(*args, capture=False, **kwargs):
     return result.stdout.strip() if capture else None
 
 
+def checkout_build_info():
+    """Pass revision metadata into the frontend without copying .git into an image.
+
+    Archives carry export-subst metadata themselves; ordinary source copies are
+    explicitly shown as unversioned builds rather than borrowing a parent's Git.
+    """
+    if not (SOURCE / '.git').exists():
+        return None
+    commit, committed_at = run('git', 'show', '-s', '--format=%H%n%cI', 'HEAD', cwd=SOURCE, capture=True).splitlines()
+    dirty = bool(run('git', 'status', '--porcelain', '--untracked-files=normal', cwd=SOURCE, capture=True))
+    return json.dumps({'commit': commit, 'committedAt': committed_at, 'dirty': dirty}, separators=(',', ':'))
+
+
 def validate(address, port, name, state, *, proxy=False):
     ip = ipaddress.IPv4Address(address)
     if not (proxy and ip.is_loopback) and not any(ip in network for network in PRIVATE_NETWORKS):
@@ -291,6 +304,8 @@ def install(args):
     verify_units(rendered)
     print('Building Stow; the existing service keeps running during the build.', flush=True)
     build = ['podman', 'build', '--format', 'oci', '--tag', 'localhost/stow:' + args.name, '--file', 'Containerfile']
+    if metadata := checkout_build_info():
+        build += ['--build-arg', 'STOW_BUILD_INFO=' + metadata]
     if args.build_network:
         build += ['--network', args.build_network]
     run(*build, '.', cwd=SOURCE)
