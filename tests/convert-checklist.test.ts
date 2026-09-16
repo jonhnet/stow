@@ -92,6 +92,23 @@ test('offline conversion retains concurrent body and checklist edits after synch
   assert.deepEqual(local.getItems(id).map(item => item.text), ['Edited elsewhere']);
 });
 
+for (const lines of [['One', 'Two'], ['One', 'One', 'Two']]) test(`concurrent offline conversions preserve each source line once: ${lines.join(' / ')}`, {
+  todo: 'Concurrent conversions currently create duplicate items; remove this TODO when they reconcile.',
+}, t => {
+  const local = model(t), id = local.createNote('text', { body: lines.join('\n') });
+  local.finishEdit();
+  const remote = model(t, local);
+  assert.equal(local.convertBodyToChecklist(id), true);
+  assert.equal(remote.convertBodyToChecklist(id), true);
+  local.finishEdit(); remote.finishEdit();
+  const left = Y.encodeStateAsUpdate(local.doc), right = Y.encodeStateAsUpdate(remote.doc);
+  Y.applyUpdate(local.doc, right, 'remote'); Y.applyUpdate(remote.doc, left, 'remote');
+  assert.deepEqual(local.getNotes(), remote.getNotes());
+  assert.equal(local.getNote(id)!.body, '');
+  // Coalesce conversion of the same source lines, not distinct lines with equal text.
+  assert.deepEqual(local.getItems(id).map(item => item.text), lines);
+});
+
 test('conversion re-spaces roots when ranks cannot accommodate a prefix, and undo restores their ranks', t => {
   const vault = model(t), id = vault.createNote('checklist', { body: 'One\nTwo' });
   const root = vault.addItem(id, 'Root'), child = vault.addItem(id, 'Child', root);
