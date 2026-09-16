@@ -37,7 +37,7 @@ jobs:
       - name: Install locked dependencies and browser
         run: |
           ./setup.sh
-          npm run browsers:install -- --with-deps
+          npm run browsers:install -- --with-deps firefox
       - name: Build and test
         run: npm run check
       - name: Upload failed check diagnostics
@@ -49,6 +49,7 @@ jobs:
             build/logs
             build/test-results
             build/playwright-report
+            build/sync-failures
           retention-days: 7
   hosting:
     runs-on: ubuntu-24.04

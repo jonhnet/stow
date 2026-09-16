@@ -166,7 +166,10 @@ export class SyncTransfer {
     this.outgoing?.release?.(); this.outgoing?.reject(error); this.outgoing = undefined;
     this.queue.splice(0).forEach(value => { value.release?.(); value.reject(error); }); this.queuedBytes = 0;
     if (tellPeer) try { this.control({ type: 'failure', code: error.code, message: error.message }); } catch { /* Disconnected. */ }
-    try { this.socket.close(error.code === 'limit' ? 1009 : error.code === 'invalid' ? 1008 : 1013, error.code); } catch { /* Already closed. */ }
+    // WebSocket.close() in a browser accepts 1000 or application codes 3000–4999.
+    // The server may send 1008/1009/1013, but requesting those here throws and
+    // leaves a timed-out socket OPEN, preventing the store from reconnecting.
+    try { this.socket.close(error.code === 'limit' ? 4009 : error.code === 'invalid' ? 4008 : 4013, error.code); } catch { /* Already closed. */ }
     this.options.onFailure(error);
   }
   close() { this.fail(new TransferError('retry', 'Sync connection closed. Unacknowledged edits remain on this device.'), false); }

@@ -17,6 +17,32 @@ use std::{
 };
 use yrs::{Doc, Map, ReadTxn, Transact};
 
+// Only the disposable test driver configures this gate. Production builds omit
+// it entirely. A test observes `reached` before killing the actual server process.
+#[cfg(feature = "test-support")]
+pub(crate) static TEST_STORAGE_GATE: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+#[cfg(feature = "test-support")]
+fn test_storage_gate(path: &Path, phase: &str) -> Result<()> {
+    let Some(directory) = TEST_STORAGE_GATE.get() else {
+        return Ok(());
+    };
+    let Some(bytes) = read_optional(&directory.join("armed.json"))? else {
+        return Ok(());
+    };
+    let gate: Value = serde_json::from_slice(&bytes)?;
+    if gate["phase"] == phase
+        && gate["suffix"]
+            .as_str()
+            .is_some_and(|suffix| path.ends_with(suffix))
+    {
+        fs::write(directory.join("reached"), phase)?;
+        while !directory.join("release").exists() {
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+    }
+    Ok(())
+}
+
 pub fn sync_directory(path: &Path) -> Result<()> {
     File::open(path)?.sync_all()?;
     Ok(())
@@ -49,11 +75,16 @@ pub fn atomic_write(path: &Path, bytes: &[u8]) -> Result<()> {
         file.write_all(bytes)?;
         file.sync_all()?;
         drop(file);
+        #[cfg(feature = "test-support")]
+        test_storage_gate(path, "before-publish")?;
         fs::rename(&tmp, path)?;
         sync_directory(
             path.parent()
                 .ok_or_else(|| Error::invalid("Missing parent directory"))?,
-        )
+        )?;
+        #[cfg(feature = "test-support")]
+        test_storage_gate(path, "after-publish")?;
+        Ok(())
     })();
     if result.is_err() {
         let _ = fs::remove_file(&tmp);

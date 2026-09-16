@@ -22,6 +22,8 @@ WebSocket admission requires both `protocol=2` and `schema=stow-current-v1`, plu
 
 All messages use `SyncTransfer`: JSON control frames (`begin`, receipts, `done`, failure) and ordered binary chunks, each with an eight-byte transfer-ID/offset prefix. SHA-256 validates a complete logical unit before application. Chunk receipts grant flow-control credit; `done` follows fsync on the server or IndexedDB commit in the browser. Lost acknowledgments replay safely through Yjs idempotence.
 
+Client-initiated failure closes use application codes 4008 (invalid), 4009 (limit), and 4013 (retry/storage), which the browser WebSocket API permits. Server-initiated closes may use standard codes 1008/1009/1013. A retryable client failure must actually close the socket so the store can reconnect.
+
 | Bound | Value |
 | --- | --- |
 | Binary frame | 256 KiB including header |

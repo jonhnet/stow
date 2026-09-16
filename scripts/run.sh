@@ -19,6 +19,14 @@ case "$task" in
   start) exec "$CARGO_TARGET_DIR/release/stow-server" "$@" ;;
   test) cargo test --locked --all-features; cargo build --locked --features test-support; exec node --import tsx --test --test-concurrency=4 "$@" tests/*.test.ts ;;
   test:e2e) cargo build --locked --features test-support; exec playwright test "$@" ;;
+  test:sync)
+    cargo build --locked --features test-support
+    tsc --noEmit
+    vite build
+    node --import tsx --test tests/sync-schedule.test.ts tests/sync-crash.test.ts tests/sync-transfer.test.ts tests/sync-reducer.test.ts
+    playwright test sync-schedules.spec.ts "$@"
+    if [ -z "${STOW_TEST_BROWSER:-}" ]; then STOW_TEST_BROWSER=firefox playwright test sync-schedules.spec.ts "$@"; fi
+    ;;
   browsers:install) exec playwright install chromium "$@" ;;
   *) printf 'Unknown task: %s\n' "$task" >&2; exit 1 ;;
 esac

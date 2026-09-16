@@ -2,6 +2,8 @@ import { defineConfig } from '@playwright/test';
 import { existsSync } from 'node:fs';
 import path from 'node:path';
 import { buildDir } from './paths.ts';
+const browserName = process.env.STOW_TEST_BROWSER ?? 'chromium';
+if (browserName !== 'chromium' && browserName !== 'firefox') throw new Error('STOW_TEST_BROWSER must be chromium or firefox');
 export default defineConfig({
   testDir: './tests/browser',
   outputDir: path.join(buildDir, 'test-results'),
@@ -10,8 +12,8 @@ export default defineConfig({
   workers: 1,
   use: {
     baseURL: 'http://localhost:4173',
-    browserName: 'chromium',
-    launchOptions: { executablePath: process.env.CHROME_PATH ?? (existsSync('/opt/google/chrome/chrome') ? '/opt/google/chrome/chrome' : undefined), args: ['--no-sandbox', '--host-resolver-rules=MAP stow.test 127.0.0.1'] },
+    browserName,
+    launchOptions: browserName === 'chromium' ? { executablePath: process.env.CHROME_PATH ?? (existsSync('/opt/google/chrome/chrome') ? '/opt/google/chrome/chrome' : undefined), args: ['--no-sandbox', '--host-resolver-rules=MAP stow.test 127.0.0.1'] } : {},
     trace: 'retain-on-failure',
     screenshot: 'only-on-failure'
   },

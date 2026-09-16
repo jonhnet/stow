@@ -150,6 +150,11 @@ pub async fn run() -> Result<()> {
             .transpose()?
             .ok_or_else(|| Error::invalid("Missing configuration"))?,
     )?;
+    if let Some(directory) = options["storageGate"].as_str() {
+        crate::storage::TEST_STORAGE_GATE
+            .set(directory.into())
+            .map_err(|_| Error::invalid("Storage gate already configured"))?;
+    }
     let running = server::start(Config::for_test(&options)?).await?;
     output(json!({"port":running.address.port(),"address":running.address.ip().to_string()}))?;
     for line in input {

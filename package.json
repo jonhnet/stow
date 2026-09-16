@@ -10,6 +10,7 @@
     "start": "./scripts/run.sh start",
     "test": "./scripts/run.sh test",
     "test:e2e": "./scripts/run.sh test:e2e",
+    "test:sync": "./scripts/run.sh test:sync",
     "browsers:install": "./scripts/run.sh browsers:install",
     "check": "./scripts/ci.sh"
   },

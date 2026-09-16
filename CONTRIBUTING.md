@@ -8,7 +8,7 @@ Give each checkout its own containing workspace. From that workspace:
 git clone YOUR_REPOSITORY_URL stow-git
 cd stow-git
 ./setup.sh
-npm run browsers:install -- --with-deps
+npm run browsers:install -- --with-deps firefox
 npm run check
 ```
 
@@ -17,6 +17,8 @@ npm run check
 `npm run check` runs the same checks as GitHub CI: Rust formatting and Clippy, native and client tests, TypeScript checking and the production build, tool smoke tests, and Playwright browser journeys. The workflow also scans the tracked tree and complete Git history for secrets. To run that check locally, use `scripts/check-secrets.sh` with Gitleaks on `PATH` or `GITLEAKS_BIN` set to its executable. Logs and failed-browser traces are uploaded on CI failure.
 
 For a narrower check, use `npm test`, `npm run build`, or `npm run test:e2e`. Browser tests serve the production bundle, so build first. Set `CHROME_PATH` to select another Chrome executable; otherwise the suite uses installed Chrome when available or Playwright Chromium. Performance runners use `CHROME_PATH` or Playwright Chromium.
+
+`npm run test:sync` builds and runs the offline/reconnect harness, including seeded three-participant schedules, process-kill durability checks, and Chromium/Firefox browser interruptions. CI runs the Firefox sync cases in addition to the full Chromium suite. See [sync testing](docs/SYNC_TESTING.md) for replaying and reducing saved failures and running larger workloads.
 
 Installer regression tests run with `python3 -B -m unittest discover -s tests/hosting`. Separate CI jobs run `sudo python3 -B tests/hosting/smoke.py --mode MODE` for `home`, `proxy-loopback`, and `proxy-lan` on a systemd host with Podman and the locked Node dependencies installed. Each creates and removes a disposable installation, tests Chromium with real CA trust, and verifies uploads, offline edits across updates, backup/restore, and crash recovery. The proxy cases exercise the generated nginx snippet with local and remote HTTP backends. Logs stay in `../build/logs/hosting-MODE`.
 

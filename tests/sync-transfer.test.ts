@@ -114,6 +114,21 @@ test('snapshot framing validates bounds and exposes views instead of another ful
   assert.throws(() => unpackSync(Uint8Array.of(0, 0, 0, 8, 0, 0)), /incompatible vault format/);
 });
 
+test('transfer failures use close codes permitted by the browser WebSocket API', async () => {
+  for (const [failure, expected] of [['invalid', 4008], ['limit', 4009], ['retry', 4013]] as const) {
+    let closed: number | undefined;
+    const transfer = new SyncTransfer({ bufferedAmount: 0, send() {}, close(code) {
+      // A thrown close is caught by SyncTransfer, so also assert it took effect.
+      if (code !== 1000 && (code === undefined || code < 3000 || code > 4999)) throw new DOMException('Invalid close code', 'InvalidAccessError');
+      closed = code;
+    } }, { onMessage() {}, onFailure() {} });
+    if (failure === 'invalid') transfer.receive('not JSON');
+    else if (failure === 'limit') await assert.rejects(transfer.send('history-boundary', new Uint8Array(TRANSFER_FRAME_BYTES + 1)));
+    else transfer.close();
+    assert.equal(closed, expected);
+  }
+});
+
 test('disposable history hints obey a smaller budget without closing current-edit sync', async t => {
   const received: string[] = [];
   const p = pair(t, {}, { onMessage(kind) { received.push(kind); } });

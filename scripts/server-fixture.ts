@@ -3,7 +3,7 @@ import { spawn } from 'node:child_process';
 import { createInterface } from 'node:readline';
 import path from 'node:path';
 import { buildDir, sourceDir } from '../paths.ts';
-export type ServerOptions = { port?: number; host?: string; dataDir?: string; password?: string; authMode?: 'password' | 'proxy'; proxySecret?: string; allowInsecure?: boolean; origin?: string; staticDir?: string; now?: () => number };
+export type ServerOptions = { port?: number; host?: string; dataDir?: string; password?: string; authMode?: 'password' | 'proxy'; proxySecret?: string; allowInsecure?: boolean; origin?: string; staticDir?: string; now?: () => number; storageGate?: string };
 export async function startServer(options: ServerOptions = {}, executable = path.join(buildDir, 'cargo-target', 'debug', 'stow-test-driver')) {
   const child = spawn(executable, ['serve'], { cwd: sourceDir, stdio: ['pipe', 'pipe', 'pipe'] });
   let stderr = '', ended: Error | undefined;
@@ -23,6 +23,7 @@ export async function startServer(options: ServerOptions = {}, executable = path
     const ready = await request({ ...options, now: options.now?.() });
     return { port: ready.port as number, address: { address: ready.address as string, port: ready.port as number },
       async close() { if (!ended) child.stdin.end('{"op":"close"}\n'); await exited; },
+      async crash() { child.kill('SIGKILL'); await exited; },
       memory: (): Promise<{ rssBytes: number; maxRSSBytes: number }> => request({ op: 'memory' }),
     };
   } catch (error) { child.kill('SIGTERM'); await exited; throw error; }
