@@ -47,11 +47,15 @@ WebSocket admission requires both `protocol=3` and `schema=stow-current-v1`, plu
 
 Browsers send `X-Stow-Sync-Protocol` and `X-Stow-Schema` on the authenticated
 `/api/session` check. An incompatible client receives the verified account plus
-`syncRejection: {code, message, action, target}`; WebSocket HTTP 426 responses
-carry the same rejection. The session channel is necessary because browser
-WebSocket APIs hide rejected handshake bodies. Headerless identity-only callers
-remain supported, but cannot bypass WebSocket admission. Authentication and
-account changes take priority over update handling.
+`syncRejection: {code, message, action, target}`. If compatibility changes between
+preflight and connection, the authenticated WebSocket upgrades only to send
+`{type: "sync-rejection", rejection: {code, message, action, target}}`, followed
+by a policy close (1008). Browser WebSocket APIs hide HTTP handshake rejections,
+so those cannot communicate a terminal update instruction. The rejection path
+never opens the vault or processes or acknowledges sync data. Headerless
+identity-only callers remain supported, but cannot bypass WebSocket admission.
+Authentication, origin and vault identity checks run before this rejection path.
+Account changes take priority over update handling.
 
 `action: "reload"` leaves a persistent notice and stops sync. The client reloads
 after five seconds of inactivity in a visible page, with no active input
@@ -62,8 +66,7 @@ acknowledgment. The local Undo/Redo stack is committed with the edits. One autom
 per account and required target is recorded in sessionStorage; a still-rejected
 bundle keeps the notice and a manual Reload button instead of looping. Storage
 failure prevents automatic navigation. `action: "none"` surfaces the rejection
-without scheduling a reload. Clients predating this handling still need a manual
-reload to install it.
+without scheduling a reload.
 
 All messages use `SyncTransfer`: JSON control frames (`begin`, receipts, `done`, failure) and ordered binary chunks, each with an eight-byte transfer-ID/offset prefix. SHA-256 validates a complete logical unit before application. Chunk receipts grant flow-control credit; `done` follows fsync on the server or IndexedDB commit in the browser. Lost acknowledgments replay safely through Yjs idempotence.
 

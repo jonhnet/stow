@@ -1125,11 +1125,17 @@ async fn upgrade(
             .map(|(_, v)| v.as_ref())
             .collect();
         if values != [value] {
-            let notice = client_update_required();
-            return Ok(json_response(
-                426,
-                json!({"error": notice["message"], "syncRejection": notice}),
-            ));
+            // Browser WebSocket APIs hide failed HTTP handshakes. Upgrade only
+            // to deliver a terminal notice, before opening or leasing a vault.
+            let tracker = state.connections.clone();
+            let shutdown = state.shutdown.clone();
+            return Ok(ws
+                .max_message_size(transfer::FRAME)
+                .max_frame_size(transfer::FRAME)
+                .on_upgrade(move |socket| {
+                    tracker.track_future(reject_incompatible(socket, shutdown))
+                })
+                .into_response());
         }
     }
     let copy = state.clone();
@@ -1160,6 +1166,38 @@ async fn upgrade(
         })
         .into_response())
 }
+
+async fn reject_incompatible(mut socket: WebSocket, shutdown: CancellationToken) {
+    let close = async {
+        socket
+            .send(Message::Text(
+                json!({"type": "sync-rejection", "rejection": client_update_required()})
+                    .to_string()
+                    .into(),
+            ))
+            .await?;
+        socket
+            .send(Message::Close(Some(CloseFrame {
+                code: 1008,
+                reason: "client_update_required".into(),
+            })))
+            .await?;
+        // Finish the close handshake so browsers receive the policy code.
+        // Discard any data already in flight without processing or acknowledging
+        // it. This path has no account handle or sync transfer state.
+        while let Some(Ok(message)) = socket.next().await {
+            if matches!(message, Message::Close(_)) {
+                break;
+            }
+        }
+        Ok::<_, axum::Error>(())
+    };
+    tokio::select! {
+        _ = shutdown.cancelled() => {},
+        _ = tokio::time::timeout(Duration::from_secs(5), close) => {},
+    }
+}
+
 async fn process_unit(
     state: &Arc<ServerState>,
     vault_id: &str,

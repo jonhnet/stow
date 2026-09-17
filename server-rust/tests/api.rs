@@ -410,12 +410,8 @@ async fn schema_protocol_and_vault_duplicates_reject_before_account_open() {
         format!("schema={CURRENT_SCHEMA}&protocol=2&vaultId={id}"),
         format!("schema={CURRENT_SCHEMA}&protocol=3&protocol=3&vaultId={id}"),
     ] {
-        let Err(tungstenite::Error::Http(r)) = Socket::query(&s, &h, &query).await else {
-            panic!("admitted incompatible socket")
-        };
-        assert_eq!(r.status(), 426);
-        let body: Value = serde_json::from_slice(r.body().as_ref().unwrap()).unwrap();
-        assert_eq!(body["syncRejection"], rejection);
+        let mut rejected = Socket::query(&s, &h, &query).await.unwrap();
+        assert_sync_rejection(&mut rejected, &rejection).await;
     }
     let Err(tungstenite::Error::Http(r)) = Socket::query(
         &s,
@@ -429,6 +425,133 @@ async fn schema_protocol_and_vault_duplicates_reject_before_account_open() {
     assert_eq!(r.status(), 409);
     assert!(!dir.path().join("users").join(id).exists());
     s.close().await.unwrap();
+}
+
+async fn assert_sync_rejection(socket: &mut Socket, rejection: &Value) {
+    let frame = timeout(Duration::from_secs(2), socket.socket.next())
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    let Message::Text(text) = frame else {
+        panic!("expected a readable update notice, got {frame:?}")
+    };
+    assert_eq!(
+        serde_json::from_str::<Value>(&text).unwrap(),
+        json!({"type": "sync-rejection", "rejection": rejection})
+    );
+    let frame = timeout(Duration::from_secs(2), socket.socket.next())
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    let Message::Close(Some(close)) = frame else {
+        panic!("expected policy close immediately after notice, got {frame:?}")
+    };
+    assert_eq!(u16::from(close.code), 1008);
+    assert_eq!(close.reason, "client_update_required");
+    // Complete the close handshake. No transfer receipts or commits were sent.
+    socket.socket.flush().await.unwrap();
+    assert!(
+        timeout(Duration::from_secs(2), socket.socket.next())
+            .await
+            .unwrap()
+            .is_none()
+    );
+}
+
+#[tokio::test]
+async fn incompatible_socket_after_successful_preflight_rejects_without_accessing_vault() {
+    let dir = tempfile::tempdir().unwrap();
+    let s = start(dir.path(), json!({})).await;
+    let mut headers = auth("deployment-race", None);
+    headers.insert("x-stow-sync-protocol", "3".parse().unwrap());
+    headers.insert("x-stow-schema", CURRENT_SCHEMA.parse().unwrap());
+    let session = request(&s, "GET", "/api/session", &headers, vec![]).await;
+    assert_eq!(session.status, 200);
+    assert!(session.json()["syncRejection"].is_null());
+    let id = session.json()["vaultId"].as_str().unwrap().to_owned();
+    let headers = auth("deployment-race", Some(&id));
+
+    // Session approval does not guarantee WebSocket compatibility: a deployment
+    // can change the required versions between those two requests.
+    let query = format!("schema={CURRENT_SCHEMA}&protocol=2&vaultId={id}");
+    let mut socket = Socket::query(&s, &headers, &query).await.unwrap();
+    let pending = new_doc();
+    note(
+        &pending,
+        "offline",
+        "Pending edits must remain on the client",
+    );
+    let unit = Unit::new(
+        Kind::Update,
+        encode(&pending).into(),
+        &socket.budget,
+        Arc::new(AtomicUsize::new(0)),
+    )
+    .unwrap();
+    let frames = socket.transfer.send(unit).unwrap();
+    socket.frames(frames).await;
+    let mut incompatible = headers.clone();
+    incompatible.insert("x-stow-sync-protocol", "2".parse().unwrap());
+    let rejection = request(&s, "GET", "/api/session", &incompatible, vec![])
+        .await
+        .json()["syncRejection"]
+        .clone();
+    assert_sync_rejection(&mut socket, &rejection).await;
+    assert!(!dir.path().join("users").join(&id).exists());
+
+    // Reject origin, authentication, and ambiguous/wrong identities before
+    // upgrading, even when the advertised protocol is also incompatible.
+    let mut foreign = headers.clone();
+    foreign.insert("origin", "https://foreign.example".parse().unwrap());
+    let mut unauthenticated = headers.clone();
+    unauthenticated.remove("x-stow-proxy-secret");
+    for (headers, query, status) in [
+        (foreign, query.clone(), 403),
+        (unauthenticated, query.clone(), 401),
+        (headers.clone(), format!("{query}&vaultId={id}"), 409),
+        (
+            headers.clone(),
+            format!("schema={CURRENT_SCHEMA}&protocol=2&vaultId=wrong"),
+            409,
+        ),
+    ] {
+        let Err(tungstenite::Error::Http(response)) = Socket::query(&s, &headers, &query).await
+        else {
+            panic!("upgraded a request with invalid origin, auth, or identity")
+        };
+        assert_eq!(response.status(), status);
+    }
+    assert!(!dir.path().join("users").join(id).exists());
+    s.close().await.unwrap();
+}
+
+#[tokio::test]
+async fn incompatible_socket_waiting_for_close_does_not_delay_shutdown() {
+    let dir = tempfile::tempdir().unwrap();
+    let s = start(dir.path(), json!({})).await;
+    let id = identity(&s, "unresponsive-client").await;
+    let mut socket = Socket::query(
+        &s,
+        &auth("unresponsive-client", Some(&id)),
+        &format!("schema={CURRENT_SCHEMA}&protocol=2&vaultId={id}"),
+    )
+    .await
+    .unwrap();
+    assert!(matches!(
+        timeout(Duration::from_secs(2), socket.socket.next())
+            .await
+            .unwrap(),
+        Some(Ok(Message::Text(_)))
+    ));
+    // Leave the socket alive without reading/acknowledging the server close.
+    // Shutdown must cancel the tracked task, without waiting for its deadline.
+    timeout(Duration::from_secs(2), s.close())
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(!dir.path().join("users").join(id).exists());
 }
 #[tokio::test]
 async fn large_initial_sync_then_incremental_update_is_durable() {

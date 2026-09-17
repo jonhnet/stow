@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { test, type TestContext } from 'node:test';
-import { SyncTransfer, TransferError, TRANSFER_FRAME_BYTES, TRANSFER_MAX_BYTES, TRANSFER_WINDOW, packSync, unpackSync, type TransferOptions } from '../src/core/sync-transfer';
+import { SyncTransfer, SyncRejectionError, TransferError, TRANSFER_FRAME_BYTES, TRANSFER_MAX_BYTES, TRANSFER_WINDOW, packSync, unpackSync, type TransferOptions } from '../src/core/sync-transfer';
+import type { SyncRejection } from '../src/core/client-update';
 
 const turn = () => new Promise<void>(resolve => setTimeout(resolve, 0));
 async function until(condition: () => boolean) {
@@ -126,6 +127,39 @@ test('transfer failures use close codes permitted by the browser WebSocket API',
     else if (failure === 'limit') await assert.rejects(transfer.send('history-boundary', new Uint8Array(TRANSFER_FRAME_BYTES + 1)));
     else transfer.close();
     assert.equal(closed, expected);
+  }
+});
+
+test('a structured sync rejection preserves the update instruction and rejects pending writes without acknowledging them', async t => {
+  const rejection: SyncRejection = { code: 'client_update_required', message: 'Reload Stow to sync. Your local edits remain on this device.', action: 'reload', target: 'test-schema/4' };
+  const p = pair(t);
+  p.pause();
+  let acknowledged = false;
+  const pending = p.left.send('update', Uint8Array.of(7)).then(() => { acknowledged = true; });
+  const rejected = assert.rejects(pending, error => {
+    assert(error instanceof SyncRejectionError);
+    assert.equal(error.message, rejection.message);
+    assert.deepEqual(error.rejection, rejection);
+    return true;
+  });
+  p.left.receive(JSON.stringify({ type: 'sync-rejection', rejection }));
+  await rejected;
+  assert.equal(acknowledged, false);
+  assert(p.closed);
+  assert.deepEqual(p.leftFrames, [], 'rejection must not send an acknowledgement or echo the rejection');
+  assert.equal(p.leftErrors.length, 1);
+  p.left.close();
+  assert.equal(p.leftErrors.length, 1, 'closing must not replace the actionable rejection');
+});
+
+test('malformed sync rejections cannot request an automatic reload', t => {
+  for (const rejection of [null, {}, { code: 'client_update_required', message: 'Reload', action: 'reload' },
+    { code: 'client_update_required', message: 'Reload', action: 'execute', target: 'test' }]) {
+    const p = pair(t);
+    p.left.receive(JSON.stringify({ type: 'sync-rejection', rejection }));
+    assert.equal(p.leftErrors.length, 1);
+    assert.equal(p.leftErrors[0].code, 'invalid');
+    assert(!(p.leftErrors[0] instanceof SyncRejectionError));
   }
 });
 

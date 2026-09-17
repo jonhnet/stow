@@ -1,4 +1,5 @@
 import { CURRENT_SCHEMA } from './current-schema';
+import { parseSyncRejection, type SyncRejection } from './client-update';
 /** Protocol 2: one logical transfer in each direction, bounded binary frames.
  * A receipt grants transport credit. Only `done`, after onMessage resolves,
  * acknowledges the logical unit; the server resolves after durable publication. */
@@ -12,6 +13,11 @@ const HEADER_BYTES = 8;
 export type TransferKind = 'sync-request' | 'sync' | 'update' | 'history-boundary' | 'sync-complete' | 'history-changed' | 'history-failure';
 export class TransferError extends Error {
   constructor(readonly code: 'invalid' | 'limit' | 'retry' | 'storage', message: string) { super(message); }
+}
+/** Admission failed before any sync data was accepted. Uses the same update
+ * instruction as session preflight, including when deployment races it. */
+export class SyncRejectionError extends TransferError {
+  constructor(readonly rejection: SyncRejection) { super('invalid', rejection.message); }
 }
 export interface TransferSocket {
   readonly bufferedAmount: number;
@@ -112,6 +118,11 @@ export class SyncTransfer {
       if (typeof value !== 'string') { this.receiveChunk(value); return; }
       if (value.length > 4096) throw new TransferError('invalid', 'Oversized sync control frame.');
       const frame = JSON.parse(value);
+      if (frame?.type === 'sync-rejection') {
+        const rejection = parseSyncRejection(frame.rejection);
+        if (!rejection) throw new TransferError('invalid', 'Missing sync rejection.');
+        this.fail(new SyncRejectionError(rejection), false); return;
+      }
       if (frame?.type === 'failure') {
         if (!['invalid', 'limit', 'retry', 'storage'].includes(frame.code) || typeof frame.message !== 'string') throw new TransferError('invalid', 'Invalid sync failure response.');
         this.fail(new TransferError(frame.code, frame.message.slice(0, 512)), false); return;

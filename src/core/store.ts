@@ -1,4 +1,4 @@
-import { SyncTransfer, TransferError, unpackSync } from './sync-transfer';
+import { SyncTransfer, SyncRejectionError, TransferError, unpackSync } from './sync-transfer';
 import { SYNC_PROTOCOL_VERSION } from './protocol-version';
 import { CURRENT_SCHEMA } from './current-schema';
 import { IdleUpdateReload, parseSyncRejection, type SyncRejection } from './client-update';
@@ -402,6 +402,9 @@ class StowStore {
         this.block('Your signed-in account changed. Your edits remain in the previous account’s local vault. Reload to open the current account.');
         return;
       }
+      // A socket may reject sync while this session request is in flight.
+      // Its late approval must not restart sync or reset the update notice.
+      if (this.syncStopped) return;
       rememberAccount(account);
       if (rejection) {
         // Authenticate first, but do not open an incompatible cached vault on
@@ -415,7 +418,7 @@ class StowStore {
         this.access = 'opening';
         await this.openAccount(account);
       }
-      if (this.parked || this.access !== 'ready' || this.socket?.readyState === WebSocket.OPEN || this.socket?.readyState === WebSocket.CONNECTING) return;
+      if (this.syncStopped || this.parked || this.access !== 'ready' || this.socket?.readyState === WebSocket.OPEN || this.socket?.readyState === WebSocket.CONNECTING) return;
       this.status = 'connecting';
       this.refresh();
       startupMark('socket-start');
@@ -425,7 +428,8 @@ class StowStore {
         onFailure: error => {
           if (this.socket !== socket || this.access !== 'ready') return;
           this.error = error.message;
-          if (error.code === 'limit' || error.code === 'invalid') this.rejectSync(account, { code: error.code, message: error.message, action: 'none', target: 'sync-transfer' });
+          if (error instanceof SyncRejectionError) this.rejectSync(account, error.rejection);
+          else if (error.code === 'limit' || error.code === 'invalid') this.rejectSync(account, { code: error.code, message: error.message, action: 'none', target: 'sync-transfer' });
           this.status = 'error'; this.refresh();
         },
         onMessage: async (kind, data) => {
@@ -481,6 +485,7 @@ class StowStore {
       socket.onerror = () => socket.close();
     } catch (error) {
       if (this.accountAbort.signal.aborted || this.parked) return;
+      if (this.syncStopped && (error instanceof NetworkError || error instanceof ServerUnavailableError)) return;
       if (error instanceof ServerUnavailableError) {
         // Retry availability failures without treating them as authentication
         // or as permission to open an unverified account from the local cache.
@@ -522,6 +527,7 @@ class StowStore {
     if (!this.account) { this.access = 'opening'; this.accessMessage = null; }
     this.syncStopped = true; clearTimeout(this.retry);
     this.closeSocket(); this.status = 'error';
+    this.error = null;
     this.syncRejection = rejection;
     this.updateReload?.stop(); this.updateReload = undefined;
     if (rejection.action === 'reload') this.updateReload = new IdleUpdateReload(account.vaultId, rejection.target, {
