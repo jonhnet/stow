@@ -1,0 +1,55 @@
+{
+  "tool": "Built-in image_gen.imagegen",
+  "generatedOn": "2026-09-17",
+  "encoding": "WebP, quality 78; original dimensions preserved",
+  "prompts": [
+    {
+      "id": "01-cardboard-inspector",
+      "prompt": "Use case: photorealistic-natural. Asset type: a bundled sample kitten photo for the Stow notes-app demo. Generate ONE square photograph, no collage: a tiny orange tabby kitten sitting inside a slightly oversized empty cardboard box on a sunny wooden floor. Natural candid pet photography, charming curious expression, realistic kitten anatomy, fine soft fur, gentle window light, simple uncluttered domestic setting. No humans, no text, no logos, no watermark. Compose so the kitten stays clear when viewed as a small note thumbnail."
+    },
+    {
+      "id": "02-laundry-supervisor",
+      "prompt": "Use case: photorealistic-natural. Asset type: a bundled sample kitten photo for the Stow notes-app demo. Generate ONE square photograph, no collage: a sleepy gray kitten nestled in a clean wicker laundry basket with a folded cream towel, soft morning light. Natural candid pet photography, charming expression, realistic kitten anatomy, fine soft fur, simple uncluttered domestic setting. No humans, no text, no logos, no watermark. Compose so the kitten stays clear when viewed as a small note thumbnail."
+    },
+    {
+      "id": "03-sunbeam-auditor",
+      "prompt": "Use case: photorealistic-natural. Asset type: a bundled sample kitten photo for the Stow notes-app demo. Generate ONE square photograph, no collage: a black and white tuxedo kitten stretched comfortably in a bright warm sunbeam on a pale rug, relaxed tiny paws. Natural candid pet photography, charming expression, realistic kitten anatomy, fine soft fur, simple uncluttered domestic setting. No humans, no text, no logos, no watermark. Compose so the kitten stays clear when viewed as a small note thumbnail."
+    },
+    {
+      "id": "04-library-assistant",
+      "prompt": "Use case: photorealistic-natural. Asset type: a bundled sample kitten photo for the Stow notes-app demo. Generate ONE square photograph, no collage: a fluffy cream kitten peeking around a short stack of closed unmarked books on a low wooden shelf, cozy afternoon light. Natural candid pet photography, charming expression, realistic kitten anatomy, fine soft fur, simple uncluttered domestic setting. No humans, no text, no logos, no watermark. Compose so the kitten stays clear when viewed as a small note thumbnail."
+    },
+    {
+      "id": "05-garden-committee",
+      "prompt": "Use case: photorealistic-natural. Asset type: a bundled sample kitten photo for the Stow notes-app demo. Generate ONE square photograph, no collage: a curious calico kitten on a sheltered garden patio beside a terracotta pot of cat grass, fresh green background, no other plants within reach. Natural candid pet photography, charming expression, realistic kitten anatomy, fine soft fur, simple uncluttered domestic setting. No humans, no text, no logos, no watermark. Compose so the kitten stays clear when viewed as a small note thumbnail."
+    },
+    {
+      "id": "06-blanket-researcher",
+      "prompt": "Use case: photorealistic-natural. Asset type: a bundled sample kitten photo for the Stow notes-app demo. Generate ONE square photograph, no collage: a tiny brown tabby kitten peeking from the folds of a soft blue blanket on a couch, alert round eyes, cool daylight. Natural candid pet photography, charming expression, realistic kitten anatomy, fine soft fur, simple uncluttered domestic setting. No humans, no text, no logos, no watermark. Compose so the kitten stays clear when viewed as a small note thumbnail."
+    },
+    {
+      "id": "07-paperwork-inspector",
+      "prompt": "Use case: photorealistic-natural. Asset type: a bundled sample kitten photo for the Stow notes-app demo. Generate ONE square photograph, no collage: a silver tabby kitten sitting on a single blank sheet of paper on a neat wooden desk, soft window light, no computer. Natural candid pet photography, charming expression, realistic kitten anatomy, fine soft fur, simple uncluttered domestic setting. No humans, no text, no logos, no watermark. Compose so the kitten stays clear when viewed as a small note thumbnail."
+    },
+    {
+      "id": "08-nap-coordinator",
+      "prompt": "Use case: photorealistic-natural. Asset type: a bundled sample kitten photo for the Stow notes-app demo. Generate ONE square photograph, no collage: a ginger and white kitten curled asleep on a round sage green cushion, peaceful candid pet photo, warm afternoon light. Natural candid pet photography, charming expression, realistic kitten anatomy, fine soft fur, simple uncluttered domestic setting. No humans, no text, no logos, no watermark. Compose so the kitten stays clear when viewed as a small note thumbnail."
+    },
+    {
+      "id": "09-window-observer",
+      "prompt": "Use case: photorealistic-natural. Asset type: a bundled sample kitten photo for the Stow notes-app demo. Generate ONE square photograph, no collage: a fluffy black kitten with amber eyes sitting safely inside on a wide windowsill, softly blurred greenery outside a closed window. Natural candid pet photography, charming expression, realistic kitten anatomy, fine soft fur, simple uncluttered domestic setting. No humans, no text, no logos, no watermark. Compose so the kitten stays clear when viewed as a small note thumbnail."
+    },
+    {
+      "id": "10-basket-ambassador",
+      "prompt": "Use case: photorealistic-natural. Asset type: a bundled sample kitten photo for the Stow notes-app demo. Generate ONE square photograph, no collage: a white kitten with small gray ear patches sitting in a shallow woven basket on a cream floor, inquisitive tilted head, bright soft daylight. Natural candid pet photography, charming expression, realistic kitten anatomy, fine soft fur, simple uncluttered domestic setting. No humans, no text, no logos, no watermark. Compose so the kitten stays clear when viewed as a small note thumbnail."
+    },
+    {
+      "id": "11-toy-quality-control",
+      "prompt": "Use case: photorealistic-natural. Asset type: a bundled sample kitten photo for the Stow notes-app demo. Generate ONE square photograph, no collage: a playful tortoiseshell kitten gently reaching a paw toward a simple felt toy mouse on a pale carpet, candid natural movement, no string. Natural candid pet photography, charming expression, realistic kitten anatomy, fine soft fur, simple uncluttered domestic setting. No humans, no text, no logos, no watermark. Compose so the kitten stays clear when viewed as a small note thumbnail."
+    },
+    {
+      "id": "12-sofa-expedition",
+      "prompt": "Use case: photorealistic-natural. Asset type: a bundled sample kitten photo for the Stow notes-app demo. Generate ONE square photograph, no collage: two tiny sibling kittens, one tabby and one gray, comfortably snuggled together against a linen sofa cushion, tender relaxed natural pose. Natural candid pet photography, charming expression, realistic kitten anatomy, fine soft fur, simple uncluttered domestic setting. No humans, no text, no logos, no watermark. Compose so the kitten stays clear when viewed as a small note thumbnail."
+    }
+  ]
+}

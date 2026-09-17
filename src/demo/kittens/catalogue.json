@@ -1,0 +1,110 @@
+[
+  {
+    "id": "01-cardboard-inspector",
+    "file": "01-cardboard-inspector.webp",
+    "name": "Cardboard inspector",
+    "hash": "46a14d24e083ce18540845d29c23e3d86d1b92027f373f41c7bd25875f106e4d",
+    "size": 98508,
+    "width": 1254,
+    "height": 1254
+  },
+  {
+    "id": "02-laundry-supervisor",
+    "file": "02-laundry-supervisor.webp",
+    "name": "Laundry supervisor",
+    "hash": "d235442aea58f7f4e4a385ea38aa36d18d6f4db810c4256bd1e909d018b35d9a",
+    "size": 109292,
+    "width": 1254,
+    "height": 1254
+  },
+  {
+    "id": "03-sunbeam-auditor",
+    "file": "03-sunbeam-auditor.webp",
+    "name": "Sunbeam auditor",
+    "hash": "2680d0e07085e514a03724c3ebf8d9fc6696e6a74c3aab1cce25eb67ca81cb38",
+    "size": 104114,
+    "width": 1254,
+    "height": 1254
+  },
+  {
+    "id": "04-library-assistant",
+    "file": "04-library-assistant.webp",
+    "name": "Library assistant",
+    "hash": "7cf1d6a805238a11c6b13daa1b488cd961dcc1c000a2120c75a3f72f6e45db79",
+    "size": 70312,
+    "width": 1254,
+    "height": 1254
+  },
+  {
+    "id": "05-garden-committee",
+    "file": "05-garden-committee.webp",
+    "name": "Garden committee",
+    "hash": "d7687e5caac2a832d81555eea7318c31709a617bed059575fc7f98c723d917fb",
+    "size": 110856,
+    "width": 1254,
+    "height": 1254
+  },
+  {
+    "id": "06-blanket-researcher",
+    "file": "06-blanket-researcher.webp",
+    "name": "Blanket researcher",
+    "hash": "a655e4548f05dd57388cd41b251e8ef7da310fd9161ea07608b2d17f71550e8e",
+    "size": 127626,
+    "width": 1254,
+    "height": 1254
+  },
+  {
+    "id": "07-paperwork-inspector",
+    "file": "07-paperwork-inspector.webp",
+    "name": "Paperwork inspector",
+    "hash": "adb8008a70156dcc1b9f1167dee1363795818411c2ac8cc2459dbff6b58dca96",
+    "size": 67526,
+    "width": 1254,
+    "height": 1254
+  },
+  {
+    "id": "08-nap-coordinator",
+    "file": "08-nap-coordinator.webp",
+    "name": "Nap coordinator",
+    "hash": "e9c96b6adc08d9ff61b53f20c4b2d57cebe1be118be9887d2cc68fdf7bf603e9",
+    "size": 151456,
+    "width": 1254,
+    "height": 1254
+  },
+  {
+    "id": "09-window-observer",
+    "file": "09-window-observer.webp",
+    "name": "Window observer",
+    "hash": "0823aea2917dbc69d7b37464665761ca5a445891748f950eb675a914874cfb2b",
+    "size": 64426,
+    "width": 1254,
+    "height": 1254
+  },
+  {
+    "id": "10-basket-ambassador",
+    "file": "10-basket-ambassador.webp",
+    "name": "Basket ambassador",
+    "hash": "9d61358bd0bb8b8c3951b5fd1dc80686191c81072a5c1a9b55902b0b05512b68",
+    "size": 93990,
+    "width": 1254,
+    "height": 1254
+  },
+  {
+    "id": "11-toy-quality-control",
+    "file": "11-toy-quality-control.webp",
+    "name": "Toy quality control",
+    "hash": "3dd420ecb8bd6a8358d81dbc410763a99fe3cade2d79e05b744ec6a0287dc97e",
+    "size": 79472,
+    "width": 1254,
+    "height": 1254
+  },
+  {
+    "id": "12-sofa-expedition",
+    "file": "12-sofa-expedition.webp",
+    "name": "Sofa expedition",
+    "hash": "02067e48c295a74365e5622e7f5028ef9f13cf5d21a8dd013069c1c76a640dea",
+    "size": 125338,
+    "width": 1254,
+    "height": 1254
+  }
+]

@@ -48,6 +48,7 @@ jobs:
           path: |
             build/logs
             build/test-results
+            build/demo-test-results
             build/playwright-report
             build/sync-failures
           retention-days: 7

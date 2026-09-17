@@ -16,6 +16,9 @@ case "$task" in
   dev) exec concurrently -k 'node scripts/watch-server.mjs' 'vite --host 127.0.0.1' "$@" ;;
   dev:lan) exec concurrently -k 'node scripts/watch-server.mjs' 'vite --host 0.0.0.0' "$@" ;;
   build) cargo build --locked --release; tsc --noEmit; exec vite build "$@" ;;
+  build:demo) tsc --noEmit; exec vite build --config vite.demo.config.ts "$@" ;;
+  demo:preview) exec node scripts/serve-demo.mjs "$@" ;;
+  test:demo) exec playwright test --config playwright.demo.config.ts "$@" ;;
   start) exec "$CARGO_TARGET_DIR/release/stow-server" "$@" ;;
   test) cargo test --locked --all-features; cargo build --locked --features test-support; exec node --import tsx --test --test-concurrency=4 "$@" tests/*.test.ts ;;
   test:e2e) cargo build --locked --features test-support; exec playwright test "$@" ;;

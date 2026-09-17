@@ -23,3 +23,6 @@ check build npm run build
 check tools python3 scripts/check-tools.py
 check browser npm run test:e2e
 check browser-sync-firefox env STOW_TEST_BROWSER=firefox npm run test:e2e -- sync-schedules.spec.ts client-update.spec.ts
+check demo-build npm run build:demo
+check demo-chromium npm run test:demo
+check demo-firefox env STOW_TEST_BROWSER=firefox npm run test:demo

@@ -13,7 +13,7 @@ if (dataDir === buildDir || dataDir.startsWith(`${buildDir}${path.sep}`)) {
   throw new Error('DATA_DIR must be outside build/; that directory contains disposable artifacts.');
 }
 export default defineConfig({
-  define: { __STOW_BUILD__: JSON.stringify(buildInfo(sourceDir)) },
+  define: { __STOW_BUILD__: JSON.stringify(buildInfo(sourceDir)), __STOW_DEMO__: false },
   root: sourceDir,
   envDir: workspaceDir,
   cacheDir: path.join(buildDir, 'vite'),

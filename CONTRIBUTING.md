@@ -18,6 +18,10 @@ npm run check
 
 For a narrower check, use `npm test`, `npm run build`, or `npm run test:e2e`. Browser tests serve the production bundle, so build first. Set `CHROME_PATH` to select another Chrome executable; otherwise the suite uses installed Chrome when available or Playwright Chromium. Performance runners use `CHROME_PATH` or Playwright Chromium.
 
+The [browser-only demo](docs/DEMO.md) has its own static build and browser tests:
+`npm run build:demo`, then `npm run test:demo`. CI checks it in both Chromium and
+Firefox, including the absence of note persistence and sync.
+
 `npm run test:sync` builds and runs the offline/reconnect harness, including seeded three-participant schedules, process-kill durability checks, and Chromium/Firefox browser interruptions. CI runs the Firefox sync cases in addition to the full Chromium suite. See [sync testing](docs/SYNC_TESTING.md) for replaying and reducing saved failures and running larger workloads.
 
 Installer regression tests run with `python3 -B -m unittest discover -s tests/hosting`. Separate CI jobs run `sudo python3 -B tests/hosting/smoke.py --mode MODE` for `home`, `proxy-loopback`, and `proxy-lan` on a systemd host with Podman and the locked Node dependencies installed. Each creates and removes a disposable installation, tests Chromium with real CA trust, and verifies uploads, offline edits across updates, backup/restore, and crash recovery. They also exercise Takeout preview/apply/retry with images, persistent backups, and host development tools blocked. The proxy cases exercise the generated nginx snippet with local and remote HTTP backends. Logs stay in `../build/logs/hosting-MODE`.

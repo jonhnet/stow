@@ -50,6 +50,9 @@ For a separately installed executable, explicitly configure `DATA_DIR` and `STOW
 
 ## Environment variables
 
+The disposable [browser-only demo](DEMO.md) is a separate static artifact built
+with `npm run build:demo`; it does not use the server settings below.
+
 Keep credentials outside the checkout and `build/`. Start with [`.env.example`](../.env.example). Only browser-visible build settings should use Vite's `VITE_` prefix.
 
 | Variable | Meaning |

@@ -17,7 +17,7 @@ import type { HistoryBoundary, HistoryPage, SavedVersion, HistoryExport } from '
 import { startupAccount, startupCount, startupMark } from './startup-diagnostics';
 
 type Access = 'opening' | 'ready' | 'locked' | 'blocked';
-interface Snapshot {
+export interface Snapshot {
   notes: Note[]; labels: Label[]; historyVersion: number; status: SyncStatus; ready: boolean;
   access: Access; authMode?: AuthMode; user?: string; canReload: boolean;
   error: string | null; historyError: string | null; accessMessage: string | null;
@@ -761,5 +761,7 @@ class StowStore {
 }
 
 startupMark('store-constructing');
+/** Public UI contract, also implemented by the explicitly selected static demo. */
+export type AppStore = Pick<StowStore, keyof StowStore>;
 export const store = new StowStore();
 export function useStow() { return useSyncExternalStore(store.subscribe, store.getSnapshot); }

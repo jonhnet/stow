@@ -11,4 +11,4 @@ export interface Section { id: string; title: string; body: string; kind: NoteKi
 export interface SourceNote extends Section { color: NoteColor; pinned: boolean; archived: boolean; trashed: boolean; createdAt: number; sortOrderDate: number; updatedAt: number; unifiedChecklist?: boolean }
 export interface Note extends Omit<SourceNote, 'unifiedChecklist'> { sourceIds: string[] }
 export type { HistoryAction } from './history-types';
-export type SyncStatus = 'connecting' | 'online' | 'offline' | 'locked' | 'error';
+export type SyncStatus = 'connecting' | 'online' | 'offline' | 'locked' | 'error' | 'demo';

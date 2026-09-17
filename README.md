@@ -5,6 +5,9 @@ It features a draggable overview, markdown text body, checklists, images, links,
 It synchronizes between your browsers and phone and supports offline
 editing. It can be installed as an app (PWA) on Android.
 
+A [browser-only demo build](docs/DEMO.md) provides a disposable playground with
+randomized sample notes and kittens. Demo edits are not saved or synchronized.
+
 ## Writing and formatting
 
 Note bodies support headings, paragraphs, bulleted and numbered lists, quotations, horizontal rules, fenced/indented code, and tables. Both note bodies and checklist items support `*italic*`, `**bold**`, `~~strikethrough~~`, inline code, and `[named links](https://example.com)`. Web URLs, `www` addresses, and email addresses are recognized automatically. Checklist items use inline syntax only: a leading `#` or `-` remains ordinary item text. Single line breaks remain visible.

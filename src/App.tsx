@@ -28,6 +28,7 @@ import WindowedNotes from './WindowedNotes';
 import SelectionExport from './SelectionExport';
 import DeleteNotesDialog, { type NoteDeletion } from './DeleteNotesDialog';
 import StorageSettings from './StorageSettings';
+import { IS_DEMO, DEMO_IMAGE_MESSAGE } from './runtime';
 import ServerNotice from './ServerNotice';
 import BuildVersion from './BuildVersion';
 import { installStow, useInstallable } from './install';
@@ -133,7 +134,7 @@ function NewNoteLauncher({ onCreate }: { onCreate: (note: NewNote) => void }) {
     <div className="composer-collapsed">
       <button className="composer-prompt" onClick={() => onCreate({ kind: 'text' })}>Take a note…</button>
       <IconButton label="New checklist" onClick={() => onCreate({ kind: 'checklist' })}><CheckSquare size={23} /></IconButton>
-      <IconButton label="New note with image" onClick={() => fileRef.current?.click()}><ImagePlus size={23} /></IconButton>
+      <IconButton label="New note with image" disabled={IS_DEMO} title={IS_DEMO ? DEMO_IMAGE_MESSAGE : undefined} onClick={() => fileRef.current?.click()}><ImagePlus size={23} /></IconButton>
     </div>
   </div>;
 }
@@ -201,6 +202,7 @@ function NoteEditor({ note: savedNote, initial, onCreated, labels, onClose: clos
   const addImages = async (files: FileList | File[]) => {
     const images = Array.from(files).filter(file => file.type.startsWith('image/'));
     if (!images.length || note.trashed || showingHistory) return;
+    if (IS_DEMO) { onError(DEMO_IMAGE_MESSAGE); return; }
     const id = ensureNote();
     setUploading(count => count + images.length);
     await Promise.all(images.map(async file => {
@@ -250,12 +252,12 @@ function NoteEditor({ note: savedNote, initial, onCreated, labels, onClose: clos
         <IconButton label="Undo" title={`Undo (${undoShortcut})`} disabled={!canUndo} onClick={() => onUndoRedo('undo')}><Undo2 size={19} /></IconButton>
         <IconButton label="Redo" title={`Redo (${redoShortcut})`} disabled={!canRedo} onClick={() => onUndoRedo('redo')}><Redo2 size={19} /></IconButton>
         {!note.trashed && <><LabelPicker labels={labels} selected={note.labels} onToggle={(name, present) => store.vault.setNoteLabel(ensureNote(), name, present)} onOpen={() => { setPalette(false); setMenu(false); }} /><div className="palette-anchor" ref={paletteRef}><IconButton label="Background color" aria-expanded={palette} onClick={() => { setPalette(!palette); setMenu(false); }}><Palette size={18} /></IconButton>{palette && <ColorPicker anchor={paletteRef} value={note.color} onChange={color => store.vault.setNoteMeta(ensureNote(), { color })} onClose={() => setPalette(false)} />}</div>
-          <IconButton label="Add image" onClick={() => fileRef.current?.click()}><ImagePlus size={18} /></IconButton>
+          <IconButton label="Add image" disabled={IS_DEMO} title={IS_DEMO ? DEMO_IMAGE_MESSAGE : undefined} onClick={() => fileRef.current?.click()}><ImagePlus size={18} /></IconButton>
           {note.kind === 'text' && <IconButton label="Add checklist" onClick={() => { focusNewItem.current = true; store.vault.setNoteMeta(ensureNote(), { kind: 'checklist' }); }}><CheckSquare size={18} /></IconButton>}
           <IconButton label={note.archived ? 'Unarchive note' : 'Archive note'} disabled={!savedNote} onClick={() => { store.vault.setNoteMeta(note.id, { archived: !note.archived }); onClose(); }}>{note.archived ? <ArchiveRestore size={18} /> : <Archive size={18} />}</IconButton>
         </>}
         <div className="menu-anchor" ref={menuRef}><IconButton label="More note actions" aria-expanded={menu} onClick={() => { setMenu(!menu); setPalette(false); }}><MoreVertical size={18} /></IconButton>{menu && <div className="popup-menu editor-menu">
-          <button disabled={!savedNote} onClick={() => { setMenu(false); setHistory(true); }}><History size={17} />Version history</button>
+          <button disabled={IS_DEMO || !savedNote} title={IS_DEMO ? "Saved version history is unavailable in the demo." : undefined} onClick={() => { setMenu(false); setHistory(true); }}><History size={17} />Version history</button>
           <HistoryMenu onAction={onUndoRedo} onClose={() => setMenu(false)} />
           {!note.trashed && <>
             <button disabled={!note.body.trim()} onClick={() => {
@@ -286,7 +288,7 @@ export default function App() {
   const [selectedLabel, setSelectedLabel] = useState<string | null>(null);
   const [labelsExpanded, setLabelsExpanded] = useState(false);
   const [sidebar, setSidebar] = useState(() => window.innerWidth > 900);
-  const [listView, setListView] = useState(() => { try { return localStorage.getItem('stow-list-view') === 'true'; } catch { return false; } });
+  const [listView, setListView] = useState(() => { if (IS_DEMO) return false; try { return localStorage.getItem('stow-list-view') === 'true'; } catch { return false; } });
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [editing, setEditing] = useEditorNavigation();
   const [toast, setToast] = useState<{ message: string; kind: 'error' | 'history' | 'copy' } | null>(null);
@@ -302,7 +304,10 @@ export default function App() {
     if (description) setToast({ message: `${kind === 'undo' ? 'Undid' : 'Redid'}: ${description}`, kind: 'history' });
   }, []);
   const openNote = useCallback((id: string) => setEditing({ key: id, noteId: id }), []);
-  const createNote = (newNote: NewNote) => setEditing({ key: crypto.randomUUID(), newNote });
+  const createNote = (newNote: NewNote) => {
+    if (IS_DEMO && newNote.files?.length) { notify(DEMO_IMAGE_MESSAGE); return; }
+    setEditing({ key: crypto.randomUUID(), newNote });
+  };
   const deleteNote = useCallback((note: Note) => setDeletion({ sourceIds: [...note.sourceIds], titles: [note.title], emptyTrash: false }), []);
   const closeDeletion = useCallback(() => setDeletion(null), []);
   const deleteForever = useCallback(async (sourceIds: string[]) => {
@@ -359,7 +364,7 @@ export default function App() {
     if (access === 'ready' && ready && editing?.noteId && !activeNote && !editing.newNote) setEditing(null);
   }, [access, ready, editing, activeNote, setEditing]);
   useEffect(() => { if (access !== 'ready') setToast(previous => previous?.kind !== 'error' ? null : previous); }, [access]);
-  useEffect(() => { try { localStorage.setItem('stow-list-view', String(listView)); } catch { /* Account bootstrap reports unavailable browser storage. */ } }, [listView]);
+  useEffect(() => { if (IS_DEMO) return; try { localStorage.setItem('stow-list-view', String(listView)); } catch { /* Account bootstrap reports unavailable browser storage. */ } }, [listView]);
   useEffect(() => {
     const keys = (event: globalThis.KeyboardEvent) => {
       if (access !== 'ready' || deletion || storageSettings) return;
@@ -397,13 +402,13 @@ export default function App() {
   };
   const nav = [{ id: 'notes' as View, label: 'Notes', icon: Logo }, { id: 'archive' as View, label: 'Archive', icon: Archive }, { id: 'trash' as View, label: 'Trash', icon: Trash2 }];
   const imageStatus = images.pendingUploads ? `Uploading ${images.pendingUploads} image${images.pendingUploads === 1 ? '' : 's'}…` : images.thumbnailsRemaining ? `Saving ${images.thumbnailsRemaining} image previews for offline use…` : null;
-  const syncLabel = error || syncRejection?.message || (localPending > 0 ? 'Saving on this device…' : status === 'online' ? pending ? 'Syncing…' : imageStatus || 'Connected' : status === 'connecting' ? 'Connecting…' : status === 'locked' ? 'Locked' : status === 'error' ? 'Could not sync' : 'Offline — notes stored on this device');
+  const syncLabel = error || syncRejection?.message || (status === 'demo' ? 'Demo — not saved or synchronized' : localPending > 0 ? 'Saving on this device…' : status === 'online' ? pending ? 'Syncing…' : imageStatus || 'Connected' : status === 'connecting' ? 'Connecting…' : status === 'locked' ? 'Locked' : status === 'error' ? 'Could not sync' : 'Offline — notes stored on this device');
   return <div className={`app ${sidebar ? 'sidebar-open' : 'sidebar-closed'}`}>
     <header className={`topbar ${selected.size ? 'selection-topbar' : ''}`}>
       {selected.size ? <><IconButton label="Clear selection" onClick={() => setSelected(new Set())}><X size={24} /></IconButton><span className="selection-count">{selected.size}<span className="selection-count-word"> selected</span></span><div className="selection-actions"><IconButton label="Copy selected notes" title={`Copy selected notes (${macShortcuts ? 'Cmd+C' : 'Ctrl+C'})`} aria-keyshortcuts={macShortcuts ? "Meta+c" : "Control+c"} onClick={() => void copySelected()}><Copy size={21} /></IconButton><SelectionExport onExport={exportSelected} />{selected.size > 1 && view !== 'trash' && <button className="merge-button" aria-label="Merge notes" onClick={() => { const id = store.vault.mergeNotes([...selected]); setSelected(new Set()); openNote(id); }}><Merge size={19} /><span>Merge notes</span></button>}{selectedNotes.every(note => note.trashed) ? <><IconButton label="Restore selected notes" onClick={() => bulk({ trashed: false })}><RotateCcw size={22} /></IconButton><IconButton label="Delete forever" onClick={() => setDeletion({ sourceIds: selectedNotes.flatMap(note => note.sourceIds), titles: selectedNotes.map(note => note.title), emptyTrash: false })}><Trash2 size={22} /></IconButton></> : <><IconButton label="Pin selected notes" onClick={() => bulk({ pinned: true })}><Pin size={21} /></IconButton><IconButton label={view === 'archive' ? 'Unarchive selected notes' : 'Archive selected notes'} onClick={() => bulk({ archived: view !== 'archive' })}><Archive size={21} /></IconButton><IconButton label="Trash selected notes" onClick={() => bulk({ trashed: true })}><Trash2 size={21} /></IconButton></>}</div></> : <>
         <div className="brand-group"><IconButton label={sidebar ? 'Close navigation' : 'Open navigation'} onClick={() => setSidebar(!sidebar)}><Menu size={23} /></IconButton><button className="brand" onClick={() => navigate('notes')} aria-label="Stow home"><span className="brand-mark"><Logo size={26} strokeWidth={2.3} /></span><span>Stow</span></button></div>
         <div className="search-box"><Search size={21} /><input ref={searchRef} type="search" placeholder="Search" aria-label="Search notes" value={search} onChange={e => setSearch(e.target.value)} />{search && <IconButton label="Clear search" onClick={() => setSearch('')}><X size={20} /></IconButton>}</div>
-        <div className="header-actions"><span className={`sync-state sync-${status}`} title={`${syncLabel}${pending ? ` · ${pending} pending changes` : ''}`} role="status" aria-label={syncLabel}>{status === 'online' ? <Cloud size={20} /> : status === 'connecting' ? <LoaderCircle size={19} className="spinning" /> : <CloudOff size={20} />}<span>{error ? 'Sync issue' : localPending > 0 ? 'Saving…' : status === 'online' ? pending ? 'Syncing…' : imageStatus ? 'Saving images…' : 'Connected' : status === 'connecting' ? 'Connecting…' : status === 'locked' ? 'Locked' : 'Offline'}</span></span><IconButton label="Undo" title={`Undo (${undoShortcut})`} aria-keyshortcuts={macShortcuts ? "Meta+z" : "Control+z"} className="history-button" disabled={!canUndo} onClick={() => undoOrRedo('undo')}><Undo2 size={21} /></IconButton><IconButton label="Redo" title={`Redo (${redoShortcut})`} aria-keyshortcuts={macShortcuts ? "Meta+Shift+z" : "Control+Shift+z Control+y"} className="history-button" disabled={!canRedo} onClick={() => undoOrRedo('redo')}><Redo2 size={21} /></IconButton><IconButton label={listView ? 'Grid view' : 'List view'} className="view-button" onClick={() => setListView(!listView)}>{listView ? <LayoutGrid size={22} /> : <List size={24} />}</IconButton><div className="menu-anchor" ref={settingsRef}><IconButton label="Settings" onClick={() => setSettings(!settings)}><Settings size={22} /></IconButton>{settings && <div className="popup-menu settings-menu"><div className="settings-heading">{user}</div><BuildVersion /><div className="settings-sync"><Cloud size={16} /><span>{syncLabel}</span></div>{installable && <button type="button" onClick={() => { void installStow().catch(() => notify("Could not open the install prompt. Try installing Stow from your browser menu.")); setSettings(false); }}><DownloadCloud size={18} />Install Stow</button>}<HistoryMenu onAction={undoOrRedo} onClose={() => setSettings(false)} /><button onClick={() => { setSettings(false); setStorageSettings(true); }}><History size={18} />Storage and history</button><button onClick={() => { void store.exportData().catch(error => notify(error instanceof Error ? error.message : 'Could not export the vault.')); setSettings(false); }} disabled={status !== 'online'}><Download size={18} />Download vault backup</button>{status !== 'online' && <button onClick={() => { store.exportCurrentNotes(); setSettings(false); }}><Download size={18} />Export current notes</button>}</div>}</div></div>
+        <div className="header-actions"><span className={`sync-state sync-${status}`} title={`${syncLabel}${pending ? ` · ${pending} pending changes` : ''}`} role="status" aria-label={syncLabel}>{status === 'online' ? <Cloud size={20} /> : status === 'connecting' ? <LoaderCircle size={19} className="spinning" /> : <CloudOff size={20} />}<span>{status === 'demo' ? 'Demo' : error ? 'Sync issue' : localPending > 0 ? 'Saving…' : status === 'online' ? pending ? 'Syncing…' : imageStatus ? 'Saving images…' : 'Connected' : status === 'connecting' ? 'Connecting…' : status === 'locked' ? 'Locked' : 'Offline'}</span></span><IconButton label="Undo" title={`Undo (${undoShortcut})`} aria-keyshortcuts={macShortcuts ? "Meta+z" : "Control+z"} className="history-button" disabled={!canUndo} onClick={() => undoOrRedo('undo')}><Undo2 size={21} /></IconButton><IconButton label="Redo" title={`Redo (${redoShortcut})`} aria-keyshortcuts={macShortcuts ? "Meta+Shift+z" : "Control+Shift+z Control+y"} className="history-button" disabled={!canRedo} onClick={() => undoOrRedo('redo')}><Redo2 size={21} /></IconButton><IconButton label={listView ? 'Grid view' : 'List view'} className="view-button" onClick={() => setListView(!listView)}>{listView ? <LayoutGrid size={22} /> : <List size={24} />}</IconButton><div className="menu-anchor" ref={settingsRef}><IconButton label="Settings" onClick={() => setSettings(!settings)}><Settings size={22} /></IconButton>{settings && <div className="popup-menu settings-menu"><div className="settings-heading">{user}</div><BuildVersion /><div className="settings-sync"><Cloud size={16} /><span>{syncLabel}</span></div>{installable && <button type="button" onClick={() => { void installStow().catch(() => notify("Could not open the install prompt. Try installing Stow from your browser menu.")); setSettings(false); }}><DownloadCloud size={18} />Install Stow</button>}<HistoryMenu onAction={undoOrRedo} onClose={() => setSettings(false)} /><button disabled={IS_DEMO} title={IS_DEMO ? "The demo does not save notes or history." : undefined} onClick={() => { setSettings(false); setStorageSettings(true); }}><History size={18} />Storage and history</button><button onClick={() => { void store.exportData().catch(error => notify(error instanceof Error ? error.message : 'Could not export the vault.')); setSettings(false); }} disabled={status !== 'online'}><Download size={18} />Download vault backup</button>{status !== 'online' && <button onClick={() => { store.exportCurrentNotes(); setSettings(false); }}><Download size={18} />Export current notes</button>}</div>}</div></div>
       </>}
     </header>
     <>

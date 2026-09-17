@@ -1,8 +1,9 @@
 import { navigationFields, resourceFields, type StartupCounter, type StartupMark, type StartupReport } from './startup-report';
+import { IS_DEMO } from '../runtime';
 
 // Development reloads report automatically. Production captures require an explicit URL flag.
 // This module is also imported by persistence in Node tests, where it stays inactive.
-const enabled = typeof window !== 'undefined' && window.isSecureContext &&
+const enabled = !IS_DEMO && typeof window !== 'undefined' && window.isSecureContext &&
   (import.meta.env?.DEV || new URLSearchParams(location.search).get('startup-profile') === '1');
 const marks = new Map<StartupMark, number>();
 const counters: StartupReport['counters'] = {};
