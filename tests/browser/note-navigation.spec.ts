@@ -92,12 +92,15 @@ test('a new checklist navigates title, empty body, and the new-item input before
   await expect(editor.locator('[data-check-row]')).toHaveCount(0);
 });
 
-test('closing untouched text and checklist editors leaves no note or undo action', async ({ page }) => {
-  await ready(page);
+test('closing untouched text and checklist editors leaves no note or undo action', async ({ page, context }, info) => {
+  const origin = 'http://localhost:4174';
+  await context.addCookies([{ name: 'stow_test_user', value: `untouched-${info.testId}-${info.repeatEachIndex}@example.test`, url: origin }]);
+  await page.goto(origin);
+  await expect(page.locator('.sync-state')).toHaveAttribute('title', 'Connected');
   const notes = page.locator('.note-card');
-  const count = await notes.count();
   const undo = page.locator('header').getByRole('button', { name: 'Undo', exact: true });
-  const undoWasDisabled = await undo.isDisabled();
+  await expect(notes).toHaveCount(0);
+  await expect(undo).toBeDisabled();
   for (const launcher of ['Take a note…', 'New checklist']) {
     await page.getByRole('button', { name: launcher, exact: true }).click();
     const editor = page.getByRole('dialog', { name: 'Edit note', exact: true });
@@ -105,12 +108,13 @@ test('closing untouched text and checklist editors leaves no note or undo action
     await expect(textbox(editor, launcher === 'New checklist' ? 'New list item' : 'Note text')).toBeFocused();
     await editor.getByRole('button', { name: 'Close', exact: true }).click();
     await expect(editor).toHaveCount(0);
-    await expect(notes).toHaveCount(count);
-    expect(await undo.isDisabled()).toBe(undoWasDisabled);
+    await expect(notes).toHaveCount(0);
+    await expect(undo).toBeDisabled();
   }
   await page.reload();
   await expect(page.locator('.sync-state')).toHaveAttribute('title', 'Connected');
-  await expect(notes).toHaveCount(count);
+  await expect(notes).toHaveCount(0);
+  await expect(undo).toBeDisabled();
 });
 
 test('adding a checklist preserves prose in the shared editor', async ({ page }) => {
