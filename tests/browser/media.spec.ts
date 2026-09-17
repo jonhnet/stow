@@ -72,7 +72,7 @@ test('offline image removal keeps the original available to Undo after reload wi
   // Allow the asynchronous image-pruning pass to finish before exercising Undo.
   await page.waitForTimeout(1200);
   await page.reload();
-  await editor.getByRole('toolbar', { name: 'Edit history' }).getByRole('button', { name: 'Undo', exact: true }).click();
+  await editor.locator('.editor-toolbar').getByRole('button', { name: 'Undo', exact: true }).click();
   await expect(editor.getByRole('img', { name: 'offline.png', exact: true })).toBeVisible();
   await editor.getByRole('button', { name: 'Open original: offline.png', exact: true }).click();
   await expect(page.getByRole('dialog', { name: 'Original image: offline.png', exact: true }).getByRole('img', { name: 'offline.png', exact: true })).toBeVisible();

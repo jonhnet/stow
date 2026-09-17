@@ -175,7 +175,7 @@ test('two real workers serialize threshold compaction with another tab’s unpub
   await second.close(); await page.reload();
   await expect(page.getByRole('article', { name: 'Open note: Worker recovery', exact: true })).toContainText('first draft through concurrent compaction');
   await expect(page.getByRole('article', { name: 'Open note: Other worker', exact: true })).toContainText('second draft through concurrent compaction');
-  await page.getByRole('dialog', { name: 'Edit note', exact: true }).getByRole('toolbar', { name: 'Edit history' }).getByRole('button', { name: 'Undo', exact: true }).click();
+  await page.getByRole('dialog', { name: 'Edit note', exact: true }).locator('.editor-toolbar').getByRole('button', { name: 'Undo', exact: true }).click();
   await expect(page.getByRole('article', { name: 'Open note: Worker recovery', exact: true })).toContainText('initial durable');
   await expect(page.getByRole('article', { name: 'Open note: Other worker', exact: true })).toContainText('second draft through concurrent compaction');
 });
