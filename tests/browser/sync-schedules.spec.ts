@@ -209,11 +209,11 @@ test('callbacks retained by an old socket cannot disrupt its replacement connect
     await page.goto(origin); await connected(page); await createNote(page);
     await remote.addCookies([{ name: 'stow_test_user', value: user, url: origin }]);
     const other = await remote.newPage(); await other.goto(origin); await expect(card(other)).toBeVisible();
-    await context.setOffline(true);
+    // Hold a real remote update on the current socket, then replace it. Toggling
+    // browser connectivity here adds unrelated races between reconnect attempts.
     await page.evaluate(() => { (window as any).syncSocketCallbacks.pause = true; });
-    await context.setOffline(false);
-    await expect.poll(() => page.evaluate(() => (window as any).syncSocketCallbacks.held)).toBeGreaterThan(0);
     await edit(other, text => text + ' NEWER REMOTE STATE');
+    await expect.poll(() => page.evaluate(() => (window as any).syncSocketCallbacks.held)).toBeGreaterThan(0);
     await page.evaluate(() => (window as any).syncSocketCallbacks.replace());
     await connected(page); await expect(card(page)).toContainText('NEWER REMOTE STATE');
     await page.evaluate(() => (window as any).syncSocketCallbacks.replay());

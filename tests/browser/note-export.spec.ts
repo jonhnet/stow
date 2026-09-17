@@ -50,13 +50,14 @@ test('selected copy publishes plain and rich text in visual order, supports Ctrl
   expect(values[0]['text/html']).toContain('href="https://example.test/path"');
   await expect(page.getByRole('button', { name: 'Deselect note', exact: true })).toHaveCount(2);
 
+  await page.getByRole('button', { name: 'Dismiss notification', exact: true }).click();
   await page.getByRole('button', { name: 'Clear selection', exact: true }).click();
   await card(page, 'First visual note').getByRole('button', { name: 'Select note', exact: true }).click();
   await page.keyboard.press('Control+c');
   await expect(page.locator('.toast')).toContainText('Copied note to clipboard.');
   expect((await clipboard(page))[0]['text/plain']).not.toContain('Second visual note');
-  await page.getByRole('button', { name: 'Clear selection', exact: true }).click();
   await page.getByRole('button', { name: 'Dismiss notification', exact: true }).click();
+  await page.getByRole('button', { name: 'Clear selection', exact: true }).click();
   await card(page, 'First visual note').getByRole('heading', { name: 'First visual note', exact: true }).click();
   const field = editor(page).getByRole('textbox', { name: 'Note text', exact: true });
   await field.focus();

@@ -54,8 +54,9 @@ test('selection order produces one ordinary note with freely movable items and e
   await page.keyboard.press('Tab');
   await expect(row(dialog, 'Item B')).toHaveClass(/is-child/);
   await drag(page, dialog, 'Item C', 'Item A', 'after');
-  await expect.poll(() => itemOrder(dialog)).toEqual(['Item A', 'Item C', 'Item B']);
-  await expect(row(dialog, 'Item B')).toHaveClass(/is-child/);
+  // Moving the first root moves only that row and promotes its remaining child.
+  await expect.poll(() => itemOrder(dialog)).toEqual(['Item B', 'Item A', 'Item C']);
+  await expect(row(dialog, 'Item B')).not.toHaveClass(/is-child/);
   await page.screenshot({ path: test.info().outputPath('flat-merged-note.png') });
 
   await text.focus(); await text.fill('Unified replacement\n\n**All together**');
@@ -79,7 +80,8 @@ test('selection order produces one ordinary note with freely movable items and e
   await page.getByRole('button', { name: 'Clear search', exact: true }).click();
   await page.reload();
   await card(page, 'Title B').click();
-  await expect.poll(() => itemOrder(editor(page))).toEqual(['Item A', 'Item C', 'Item B']);
+  await expect.poll(() => itemOrder(editor(page))).toEqual(['Item B', 'Item A', 'Item C']);
+  await expect(row(editor(page), 'Item B')).not.toHaveClass(/is-child/);
   await editor(page).getByRole('textbox', { name: 'Note text', exact: true }).focus();
   await expect(editor(page).getByRole('textbox', { name: 'Note text', exact: true })).toHaveValue('Unified replacement\n\n**All together**');
 });

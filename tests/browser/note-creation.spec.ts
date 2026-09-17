@@ -26,7 +26,7 @@ test('creating and reopening a note share the editor and first typing preserves 
   await expect(body).toHaveValue('First words keep flowing.');
   await dialog.getByRole('textbox', { name: 'Note title', exact: true }).fill('One editor');
   const actions = await toolbarActions(dialog);
-  expect(actions).toEqual(['Close', 'Edit labels', 'Background color', 'Add image', 'Add checklist', 'Archive note', 'More note actions']);
+  expect(actions).toEqual(['Close', 'Undo', 'Redo', 'Edit labels', 'Background color', 'Add image', 'Add checklist', 'Archive note', 'More note actions']);
 
   await page.locator('.modal-backdrop').click({ position: { x: 4, y: 4 } });
   await expect(dialog).toHaveCount(0);

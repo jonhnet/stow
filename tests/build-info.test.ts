@@ -14,7 +14,9 @@ test('running build metadata survives deployment archives and distinguishes modi
   const git = (...args: string[]) => execFileSync('git', ['-C', source, ...args], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, GIT_AUTHOR_DATE: '2026-09-01T12:34:56Z', GIT_COMMITTER_DATE: '2026-09-02T01:02:03Z' } }).trim();
   git('init'); git('add', '.'); git('-c', 'user.name=Version test', '-c', 'user.email=version@example.test', 'commit', '-m', 'fixture');
   const version = buildInfo(source, '');
-  assert.equal(version.commit, git('rev-parse', 'HEAD')); assert.equal(version.committedAt, '2026-09-02T01:02:03+00:00'); assert.equal(version.dirty, false);
+  assert.equal(version.commit, git('rev-parse', 'HEAD'));
+  assert.equal(Date.parse(version.committedAt!), Date.parse('2026-09-02T01:02:03Z'));
+  assert.equal(version.dirty, false);
   const archive = path.join(root, 'source.tar'); git('archive', '--output', archive, 'HEAD');
   // Even nested under a different Git checkout, an archive identifies itself.
   const exported = path.join(source, 'exported'); mkdirSync(exported);
