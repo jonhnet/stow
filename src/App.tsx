@@ -46,6 +46,30 @@ function IconButton({ label, children, className = '', ...props }: React.ButtonH
   return <button type="button" className={`icon-button ${className}`} aria-label={label} title={label} {...props}>{children}</button>;
 }
 
+function Toast({ message, onDismiss }: { message: string; onDismiss: () => void }) {
+  const toast = useRef<HTMLDivElement>(null);
+  useLayoutEffect(() => {
+    const viewport = window.visualViewport!;
+    const position = () => {
+      const element = toast.current!;
+      // Follow the visible screen, including keyboard-induced panning. A fixed
+      // CSS top/bottom alone is relative to the larger layout viewport.
+      element.style.top = `${viewport.offsetTop + 12}px`;
+      element.style.left = `${viewport.offsetLeft + 12}px`;
+      element.style.maxWidth = `${viewport.width - 24}px`;
+      element.style.maxHeight = `${viewport.height - 24}px`;
+    };
+    position();
+    viewport.addEventListener('resize', position);
+    viewport.addEventListener('scroll', position);
+    return () => {
+      viewport.removeEventListener('resize', position);
+      viewport.removeEventListener('scroll', position);
+    };
+  }, []);
+  return <div ref={toast} className="toast toast-notification" role="status" aria-atomic="true"><span>{message}</span><IconButton label="Dismiss notification" onClick={onDismiss}><X size={18} /></IconButton></div>;
+}
+
 function HistoryMenu({ onAction, onClose }: { onAction: (kind: 'undo' | 'redo') => void; onClose: () => void }) {
   const { canUndo, canRedo } = useStow();
   return <><button aria-label="Undo last change" title={`Undo (${undoShortcut})`} disabled={!canUndo} onClick={() => { onAction('undo'); onClose(); }}><Undo2 size={18} />Undo</button><button aria-label="Redo last change" title={`Redo (${redoShortcut})`} disabled={!canRedo} onClick={() => { onAction('redo'); onClose(); }}><Redo2 size={18} />Redo</button></>;
@@ -207,10 +231,6 @@ function NoteEditor({ note: savedNote, initial, onCreated, labels, onClose: clos
   return <div ref={backdrop} className="modal-backdrop" onClick={e => { if (e.target === e.currentTarget) onClose(); }}>
     <div ref={dialog} {...boundaries.events} className="note-editor" style={{ backgroundColor: noteColor(note.color) }} role="dialog" aria-modal="true" aria-label={showingHistory ? 'Version history' : 'Edit note'} onKeyDown={keyDown} onPaste={e => { if (e.clipboardData.files.length) { e.preventDefault(); void addImages(e.clipboardData.files); } }} onDragOver={e => e.preventDefault()} onDrop={e => { e.preventDefault(); void addImages(e.dataTransfer.files); }}>
       {showingHistory ? <NoteHistory note={note} onBack={backToNote} onRestore={onRestore} onError={onError} /> : <>
-      <div className="editor-history-controls" role="toolbar" aria-label="Edit history">
-        <button className="text-button" title={`Undo (${undoShortcut})`} disabled={!canUndo} onClick={() => onUndoRedo('undo')}><Undo2 size={19} />Undo</button>
-        <button className="text-button" title={`Redo (${redoShortcut})`} disabled={!canRedo} onClick={() => onUndoRedo('redo')}><Redo2 size={19} />Redo</button>
-      </div>
       <input ref={fileRef} type="file" accept="image/*" multiple hidden onChange={e => { const files = Array.from(e.currentTarget.files || []); e.currentTarget.value = ''; void addImages(files); }} />
       <div className="editor-scroll">
         {note.trashed && <div className="trash-banner">This note is in the trash.<button onClick={() => { store.vault.setNoteMeta(note.id, { trashed: false }); }}>Restore</button></div>}
@@ -227,6 +247,8 @@ function NoteEditor({ note: savedNote, initial, onCreated, labels, onClose: clos
       <div className="editor-toolbar">
         <IconButton label="Close" title="Back to notes" onClick={onClose}><ArrowLeft size={20} /></IconButton><span className="toolbar-spacer" />
         {note.trashed && <IconButton label="Delete forever" onClick={() => onDelete(note)}><Trash2 size={18} /></IconButton>}
+        <IconButton label="Undo" title={`Undo (${undoShortcut})`} disabled={!canUndo} onClick={() => onUndoRedo('undo')}><Undo2 size={19} /></IconButton>
+        <IconButton label="Redo" title={`Redo (${redoShortcut})`} disabled={!canRedo} onClick={() => onUndoRedo('redo')}><Redo2 size={19} /></IconButton>
         {!note.trashed && <><LabelPicker labels={labels} selected={note.labels} onToggle={(name, present) => store.vault.setNoteLabel(ensureNote(), name, present)} onOpen={() => { setPalette(false); setMenu(false); }} /><div className="palette-anchor" ref={paletteRef}><IconButton label="Background color" aria-expanded={palette} onClick={() => { setPalette(!palette); setMenu(false); }}><Palette size={18} /></IconButton>{palette && <ColorPicker anchor={paletteRef} value={note.color} onChange={color => store.vault.setNoteMeta(ensureNote(), { color })} onClose={() => setPalette(false)} />}</div>
           <IconButton label="Add image" onClick={() => fileRef.current?.click()}><ImagePlus size={18} /></IconButton>
           {note.kind === 'text' && <IconButton label="Add checklist" onClick={() => { focusNewItem.current = true; store.vault.setNoteMeta(ensureNote(), { kind: 'checklist' }); }}><CheckSquare size={18} /></IconButton>}
@@ -413,6 +435,6 @@ export default function App() {
     {deletion && <DeleteNotesDialog deletion={deletion} onDelete={deleteForever} onClose={closeDeletion} />}
     {storageSettings && <StorageSettings onClose={() => setStorageSettings(false)} />}
     <ServerNotice />
-    {toast && !syncRejection && <div className="toast" role="status" aria-atomic="true"><span>{toast.message}</span><IconButton label="Dismiss notification" onClick={() => setToast(null)}><X size={18} /></IconButton></div>}
+    {toast && !syncRejection && <Toast message={toast.message} onDismiss={() => setToast(null)} />}
   </div>;
 }
