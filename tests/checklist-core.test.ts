@@ -50,7 +50,7 @@ test('one-level projection handles chains, cycles, missing and self parents whil
   assert(flat.every(item => items.includes(item))); assert.deepEqual(items, before);
 });
 
-test('insertion respects sibling groups and moving a parent leaves child records and ranks unchanged', t => {
+test('insertion respects sibling groups and moving the first root leaves its children in place', t => {
   const model = vault(t), note = model.createNote('checklist');
   const parent = model.addItem(note, 'Parent'), target = model.addItem(note, 'Target');
   model.addItemAfter(note, target, 'Following root');
@@ -63,12 +63,76 @@ test('insertion respects sibling groups and moving a parent leaves child records
   assert.deepEqual(groups(model, note)[0], ['Parent', ['First child', 'Middle child', 'Last child']]);
   model.redo();
   assert.deepEqual(groups(model, note)[0], ['Parent', ['New first child', 'First child', 'Middle child', 'Last child']]);
-  const childRecord = model.items.get(last), childText = childRecord!.get('text'), ranks = model.getItems(note).filter(item => item.parentId === parent).map(item => [item.id, item.rank]);
+  const childRecord = model.items.get(last), childText = childRecord!.get('text');
   assert.equal(model.moveItemRelative(parent, target, 'after'), true);
-  assert.deepEqual(groups(model, note), [['Target', []], ['Parent', ['New first child', 'First child', 'Middle child', 'Last child']], ['Following root', []]]);
+  assert.deepEqual(groups(model, note), [['New first child', ['First child', 'Middle child', 'Last child']], ['Target', []], ['Parent', []], ['Following root', []]]);
   assert.equal(model.items.get(last), childRecord); assert.equal(model.items.get(last)!.get('text'), childText);
-  assert.deepEqual(model.getItems(note).filter(item => item.parentId === parent).map(item => [item.id, item.rank]), ranks);
-  assert.equal(model.setItemParent(parent, target), false);
+  assert.equal(model.setItemParent(parent, target), true);
+  assert.deepEqual(groups(model, note), [['New first child', ['First child', 'Middle child', 'Last child']], ['Target', ['Parent']], ['Following root', []]]);
+});
+
+test('moving a root moves just that row and keeps unselected rows at their visible depths', t => {
+  const model = vault(t), note = model.createNote('checklist');
+  const [a, b, c, d, e] = ['A', 'B', 'C', 'D', 'E'].map(text => model.addItem(note, text));
+  model.indentItem(b); model.indentItem(d);
+  const original = model.captureHistoryState([note]);
+  const records = [a, b, c, d, e].map(id => model.items.get(id));
+  model.undoManager.clear();
+  assert.equal(model.moveItemRelative(c, e, 'after', null), true);
+  assert.deepEqual(groups(model, note), [['A', ['B', 'D']], ['E', []], ['C', []]]);
+  assert.deepEqual(model.getItems(note).map(item => item.id), [a, b, d, e, c]);
+  assert.equal(model.undoManager.undoStack.length, 1);
+  model.undo();
+  assert.deepEqual(model.captureHistoryState([note]).sources[note].items, original.sources[note].items);
+  model.redo();
+  assert.deepEqual(groups(model, note), [['A', ['B', 'D']], ['E', []], ['C', []]]);
+  assert.deepEqual(groups(vault(t, model), note), groups(model, note));
+  [a, b, c, d, e].forEach((id, index) => assert.equal(model.items.get(id), records[index]));
+});
+
+test('dropping a root after another root inserts before its first child', t => {
+  const model = vault(t), note = model.createNote('checklist');
+  const [a, b, c, d, e] = ['A', 'B', 'C', 'D', 'E'].map(text => model.addItem(note, text));
+  model.indentItem(b); model.indentItem(d);
+  assert.equal(model.moveItemRelative(c, a, 'after', null), true);
+  assert.deepEqual(groups(model, note), [['A', []], ['C', ['B', 'D']], ['E', []]]);
+  assert.deepEqual(model.getItems(note).map(item => item.id), [a, c, b, d, e]);
+});
+
+test('keyboard reordering moves one visible row while preserving the selected indentation', t => {
+  const model = vault(t), note = model.createNote('checklist');
+  const [a, b, c, d, e] = ['A', 'B', 'C', 'D', 'E'].map(text => model.addItem(note, text));
+  model.indentItem(b); model.indentItem(d);
+  model.moveItem(c, -1);
+  assert.deepEqual(groups(model, note), [['A', []], ['C', ['B', 'D']], ['E', []]]);
+  model.undo();
+  model.moveItem(c, 1);
+  assert.deepEqual(groups(model, note), [['A', ['B', 'D']], ['C', []], ['E', []]]);
+  model.undo();
+  model.moveItem(b, 1);
+  assert.deepEqual(groups(model, note), [['A', []], ['C', ['B', 'D']], ['E', []]]);
+  model.undo();
+  const before = Y.encodeStateAsUpdate(model.doc);
+  model.moveItem(b, -1);
+  assert.deepEqual(Y.encodeStateAsUpdate(model.doc), before, 'an indented row cannot become the first row');
+});
+
+test('undoing a single-row move preserves concurrent edits to children left behind', t => {
+  const desktop = vault(t), note = desktop.createNote('checklist');
+  const [a, b, c, d, e] = ['A', 'B', 'C', 'D', 'E'].map(text => desktop.addItem(note, text));
+  desktop.indentItem(b); desktop.indentItem(d);
+  const phone = vault(t, desktop), record = desktop.items.get(d), text = record!.get('text');
+  desktop.undoManager.clear();
+  desktop.moveItemRelative(c, e, 'after', null);
+  phone.setItemText(d, 'D edited offline'); phone.toggleItem(d);
+  sync(desktop, phone);
+  desktop.undo(); sync(desktop, phone);
+  assert.deepEqual(groups(desktop, note), [['A', ['B']], ['C', ['D edited offline']], ['E', []]]);
+  assert.equal(desktop.items.get(d), record); assert.equal(record!.get('text'), text);
+  assert.equal(text.toString(), 'D edited offline'); assert.equal(record!.get('checked'), true);
+  desktop.redo(); sync(desktop, phone);
+  assert.deepEqual(groups(desktop, note), [['A', ['B', 'D edited offline']], ['E', []], ['C', []]]);
+  assert.equal(record!.get('checked'), true);
 });
 
 test('explicit drop depth supports first-child insertion, reparenting and root anchors, while invalid targets are no-ops', t => {
@@ -83,26 +147,121 @@ test('explicit drop depth supports first-child insertion, reparenting and root a
   assert.deepEqual(groups(model, note), [['Parent', ['Leaf']], ['Other', ['First', 'Target']], ['Second', []]]);
   const before = Y.encodeStateAsUpdate(model.doc);
   assert.equal(model.moveItemRelative(leaf, target, 'before', parent), false);
-  assert.equal(model.moveItemRelative(parent, target, 'after', other), false);
+  assert.equal(model.moveItemRelative(parent, leaf, 'after', parent), false);
   assert.equal(model.moveItemRelative(leaf, parent, 'before', parent), false);
   assert.equal(model.setItemParent(leaf, leaf), false);
   assert.equal(model.setItemParent(leaf, 'missing'), false);
   assert.deepEqual(Y.encodeStateAsUpdate(model.doc), before);
 });
 
-test('outdent places a child immediately after its old group and keyboard indentation uses visible root groups', t => {
+test('outdent keeps row order and keyboard indentation uses visible root groups', t => {
   const model = vault(t), note = model.createNote('checklist');
   const first = model.addItem(note, 'First'), checked = model.addItem(note, 'Completed'), last = model.addItem(note, 'Last');
   model.toggleItem(checked);
+  const completed = model.items.get(checked)!;
+  const completedState = [completed.get('parentId'), completed.get('rank'), completed.get('checked')];
+  const activeGroups = () => checklistGroups(model.getItems(note)).filter(group => !isChecklistGroupChecked(group))
+    .map(group => [group.root.text, group.children.map(item => item.text)]);
   assert.equal(model.indentItem(first), false); assert.equal(model.indentItem(last), true);
-  assert.deepEqual(groups(model, note), [['First', ['Last']], ['Completed', []]]);
+  assert.deepEqual(activeGroups(), [['First', ['Last']]]);
   const sibling = model.addItem(note, 'Sibling', first);
   assert.equal(model.outdentItem(last), true);
-  assert.deepEqual(groups(model, note), [['First', ['Sibling']], ['Last', []], ['Completed', []]]);
+  assert.deepEqual(activeGroups(), [['First', []], ['Last', ['Sibling']]]);
   assert.equal(model.outdentItem(last), false);
   model.addItemAfter(note, sibling, 'Second sibling');
   model.moveItem(sibling, 1);
-  assert.deepEqual(groups(model, note)[0], ['First', ['Second sibling', 'Sibling']]);
+  assert.deepEqual(activeGroups()[1], ['Last', ['Second sibling', 'Sibling']]);
+  assert.deepEqual([completed.get('parentId'), completed.get('rank'), completed.get('checked')], completedState);
+});
+
+test('outdenting first or middle children leaves following rows indented under the new root', t => {
+  for (const method of ['outdent', 'parent', 'drop'] as const) for (const selectedIndex of [1, 2]) {
+    const model = vault(t), note = model.createNote('checklist');
+    const ids = ['A', 'B', 'C', 'D', 'E', 'F', 'G'].map(text => model.addItem(note, text));
+    for (const id of ids.slice(1, 4)) model.indentItem(id);
+    const selected = ids[selectedIndex], before = model.captureHistoryState([note]);
+    model.undoManager.clear();
+    const changed = method === 'outdent' ? model.outdentItem(selected) : method === 'parent'
+      ? model.setItemParent(selected, null) : model.moveItemRelative(selected, ids[selectedIndex + 1], 'before', null);
+    assert.equal(changed, true);
+    const expected = selectedIndex === 1 ? [['A', []], ['B', ['C', 'D']], ['E', []], ['F', []], ['G', []]]
+      : [['A', ['B']], ['C', ['D']], ['E', []], ['F', []], ['G', []]];
+    assert.deepEqual(groups(model, note), expected);
+    assert.deepEqual(model.getItems(note).map(item => item.id), ids);
+    assert.equal(model.undoManager.undoStack.length, 1);
+    model.undo(); assert.deepEqual(model.captureHistoryState([note]).sources[note].items, before.sources[note].items);
+    model.redo(); assert.deepEqual(groups(model, note), expected);
+    assert.deepEqual(groups(vault(t, model), note), expected);
+  }
+});
+
+test('a root drop splits the target group at its literal row even when root order is unchanged', t => {
+  for (const placement of ['before', 'after'] as const) {
+    const model = vault(t), note = model.createNote('checklist');
+    const [a, b, c, d, x, y, e] = ['A', 'B', 'C', 'D', 'X', 'Y', 'E'].map(text => model.addItem(note, text));
+    for (const id of [b, c, d]) model.indentItem(id);
+    model.indentItem(y);
+    const before = model.captureHistoryState([note]);
+    assert.equal(model.moveItemRelative(x, placement === 'before' ? c : b, placement, null), true);
+    assert.deepEqual(groups(model, note), [['A', ['B']], ['X', ['C', 'D', 'Y']], ['E', []]]);
+    model.undo(); assert.deepEqual(model.captureHistoryState([note]).sources[note].items, before.sources[note].items);
+  }
+});
+
+test('an outdent splits visible rows even when concurrent parent chains cross the cut', t => {
+  const model = vault(t), note = model.createNote('checklist');
+  const [a, b, c, d, e] = ['A', 'B', 'C', 'D', 'E'].map(text => model.addItem(note, text));
+  for (const id of [b, c, d]) model.indentItem(id);
+  model.doc.transact(() => model.items.get(b)!.set('parentId', d), 'remote');
+  const before = model.captureHistoryState([note]);
+  assert.deepEqual(groups(model, note), [['A', ['B', 'C', 'D']], ['E', []]]);
+  assert.equal(model.outdentItem(c), true);
+  assert.deepEqual(groups(model, note), [['A', ['B']], ['C', ['D']], ['E', []]]);
+  assert.equal(model.items.get(b)!.get('parentId'), a);
+  assert.equal(model.items.get(d)!.get('parentId'), c);
+  model.undo(); assert.deepEqual(model.captureHistoryState([note]).sources[note].items, before.sources[note].items);
+});
+
+test('indenting a parent makes its existing children siblings without changing visible order', t => {
+  for (const operation of ['indent', 'parent', 'drop'] as const) {
+    const model = vault(t), note = model.createNote('checklist');
+    const [a, b, c, d] = ['A', 'B', 'C', 'D'].map(text => model.addItem(note, text));
+    model.indentItem(c);
+    assert.deepEqual(groups(model, note), [['A', []], ['B', ['C']], ['D', []]]);
+    const before = model.captureHistoryState([note]);
+    const records = [a, b, c, d].map(id => model.items.get(id));
+    model.undoManager.clear();
+    const changed = operation === 'indent' ? model.indentItem(b)
+      : operation === 'parent' ? model.setItemParent(b, a) : model.moveItemRelative(b, a, 'after', a);
+    assert.equal(changed, true, operation);
+    assert.deepEqual(groups(model, note), [['A', ['B', 'C']], ['D', []]]);
+    assert.equal(model.items.get(b)!.get('parentId'), a);
+    assert.equal(model.items.get(c)!.get('parentId'), a);
+    assert.deepEqual(model.getItems(note).map(item => item.id), [a, b, c, d]);
+    assert.equal(model.undoManager.undoStack.length, 1);
+    model.undo();
+    assert.deepEqual(model.captureHistoryState([note]).sources[note].items, before.sources[note].items);
+    model.redo();
+    assert.deepEqual(groups(model, note), [['A', ['B', 'C']], ['D', []]]);
+    assert.deepEqual(groups(vault(t, model), note), groups(model, note));
+    [a, b, c, d].forEach((id, index) => assert.equal(model.items.get(id), records[index]));
+  }
+});
+
+test('a root dropped between children moves alone even when sibling ranks need re-spacing', t => {
+  const model = vault(t), note = model.createNote('checklist');
+  const a = model.addItem(note, 'A'), b = model.addItem(note, 'B'), c = model.addItem(note, 'C', b), d = model.addItem(note, 'D', b);
+  const first = model.addItem(note, 'First', a), last = model.addItem(note, 'Last', a);
+  model.doc.transact(() => {
+    model.items.get(first)!.set('rank', 1);
+    model.items.get(last)!.set('rank', 1 + Number.EPSILON);
+  }, 'remote');
+  const before = model.captureHistoryState([note]);
+  assert.equal(model.moveItemRelative(b, last, 'before', a), true);
+  assert.deepEqual(groups(model, note), [['A', ['First', 'B', 'Last', 'C', 'D']]]);
+  for (const id of [b, c, d]) assert.equal(model.items.get(id)!.get('parentId'), a);
+  model.undo();
+  assert.deepEqual(model.captureHistoryState([note]).sources[note].items, before.sources[note].items);
 });
 
 test('parent checking cascades observed children and mixed groups remain active without overriding the literal checkbox toggle', t => {
@@ -167,7 +326,8 @@ test('concurrent cycles and children added while a parent moves converge without
   const offline = vault(t, first);
   first.moveItemRelative(group.root.id, other, 'after', null);
   offline.addItem(note, 'Concurrent child', group.root.id); sync(first, offline);
-  assert.deepEqual(checklistGroups(first.getItems(note)).at(-1)!.children.map(item => item.text).sort(), [group.children[0].text, 'Concurrent child'].sort());
+  assert.deepEqual(checklistGroups(first.getItems(note)).at(-1)!.children.map(item => item.text), ['Concurrent child']);
+  assert(first.getItems(note).some(item => item.id === group.children[0].id));
 });
 
 test('Restore copy preserves cycle-root selection and rank ties while remapping every live parent ID', t => {
@@ -181,7 +341,7 @@ test('Restore copy preserves cycle-root selection and rank ties while remapping 
   assert(copied.every(item => !ids.includes(item.id) && item.parentId && copiedIds.has(item.parentId)));
 });
 
-test('moving or deleting a visible child in a concurrent chain preserves its observed siblings', t => {
+test('edits to a child in a concurrent chain follow visible grouping and undo restores raw parents', t => {
   for (const operation of ['move', 'outdent', 'delete'] as const) {
     const model = vault(t), note = model.createNote('checklist');
     const root = model.addItem(note, 'Root'), target = model.addItem(note, 'Target');
@@ -192,18 +352,18 @@ test('moving or deleting a visible child in a concurrent chain preserves its obs
     else if (operation === 'outdent') assert.equal(model.outdentItem(moved), true);
     else model.deleteItem(moved);
     const oldGroup = checklistGroups(model.getItems(note)).find(group => group.root.id === root)!;
-    assert.deepEqual(oldGroup.children.map(item => item.text), ['Sibling', 'Deeper sibling']);
-    assert.equal(model.items.get(sibling)!.get('parentId'), root);
-    assert.equal(model.items.get(deep)!.get('parentId'), sibling);
+    assert.deepEqual(oldGroup.children.map(item => item.text), operation === 'outdent' ? [] : ['Sibling', 'Deeper sibling']);
+    assert.equal(model.items.get(sibling)!.get('parentId'), operation === 'outdent' ? moved : root);
+    if (operation === 'delete') assert.equal(model.items.get(deep)!.get('parentId'), sibling);
     if (operation === 'move') assert.deepEqual(groups(model, note).at(-1), ['Target', ['Moved']]);
-    if (operation === 'outdent') assert.deepEqual(groups(model, note), [['Root', ['Sibling', 'Deeper sibling']], ['Moved', []], ['Target', []]]);
+    if (operation === 'outdent') assert.deepEqual(groups(model, note), [['Root', []], ['Moved', ['Sibling', 'Deeper sibling']], ['Target', []]]);
     model.undo();
     assert.equal(model.items.get(sibling)!.get('parentId'), moved);
     assert.deepEqual(groups(model, note), [['Root', ['Moved', 'Sibling', 'Deeper sibling']], ['Target', []]]);
   }
 });
 
-test('moving, outdenting or deleting a visible cycle child leaves the old root and siblings together', t => {
+test('moving, outdenting or deleting a visible cycle child preserves the displayed roots', t => {
   for (const operation of ['move', 'outdent', 'delete'] as const) {
     const model = vault(t), note = model.createNote('checklist');
     const first = model.addItem(note, 'First'), second = model.addItem(note, 'Second'), target = model.addItem(note, 'Target');
@@ -215,9 +375,10 @@ test('moving, outdenting or deleting a visible cycle child leaves the old root a
     else if (operation === 'outdent') assert.equal(model.outdentItem(moving), true);
     else model.deleteItem(moving);
     assert.equal(model.items.get(original.root.id)!.get('parentId'), null);
-    assert.equal(model.items.get(sibling)!.get('parentId'), original.root.id);
+    assert.equal(model.items.get(sibling)!.get('parentId'), operation === 'outdent' ? moving : original.root.id);
     const retained = checklistGroups(model.getItems(note)).find(group => group.root.id === original.root.id)!;
-    assert.deepEqual(retained.children.map(item => item.id), [sibling]);
+    assert.deepEqual(retained.children.map(item => item.id), operation === 'outdent' ? [] : [sibling]);
+    if (operation === 'outdent') assert.deepEqual(checklistGroups(model.getItems(note)).find(group => group.root.id === moving)!.children.map(item => item.id), [sibling]);
     assert(retained.children.every(item => item.id !== moving));
   }
 });

@@ -2,7 +2,7 @@
   gap: 5px;
 }
 
-.editor-checklist .editor-check-row.is-child { margin-inline-start: 24px; }
+.editor-checklist .editor-check-row.is-child { margin-inline-start: var(--check-indent); }
 
 .editor-checklist .item-drag-handle {
   width: 14px;

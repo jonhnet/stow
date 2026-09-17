@@ -19,6 +19,10 @@ import type { ChecklistConversion } from './converted-checklist';
 import { TEXT_MASK_PREFIX, textMasks, visibleTextRuns, type TextMask } from './converted-text';
 
 type RecordMap = Y.Map<any>;
+type ChecklistRowPosition = { item: Item; nested: boolean };
+const checklistRows = (groups: ChecklistGroup<Item>[]): ChecklistRowPosition[] => groups.flatMap(group => [
+  { item: group.root, nested: false }, ...group.children.map(item => ({ item, nested: true })),
+]);
 const uid = () => globalThis.crypto.randomUUID();
 const localOrigin = Symbol('local-edit');
 const boundaryOrigin = Symbol('edit-boundary');
@@ -581,6 +585,40 @@ export class Vault {
     order.forEach((itemId, position) => this.positionItem(itemId, parentId, (position + 1) * 1024));
     return true;
   }
+  /** Persist a visible row layout without replacing identities or rewriting stable ranks. */
+  private changeChecklistLayout(selected: Item, groups: ChecklistGroup<Item>[], rows: ChecklistRowPosition[], field: 'rank' | 'parentId'): boolean {
+    // If the first root moved away, the first remaining child becomes a root.
+    rows[0] = { ...rows[0], nested: false };
+    const before = checklistRows(groups);
+    if (rows.every((row, index) => row.item.id === before[index].item.id && row.nested === before[index].nested)) return false;
+    const oldParents = new Map(groups.flatMap(group => [[group.root.id, undefined], ...group.children.map(child => [child.id, group.root.id])] as [string, string | undefined][]));
+    const roots: Item[] = [], children = new Map<string, Item[]>();
+    for (const row of rows) {
+      if (!row.nested) { roots.push(row.item); children.set(row.item.id, []); }
+      else children.get(roots.at(-1)!.id)!.push(row.item);
+    }
+    const description = field === 'rank' ? 'Reordered checklist item'
+      : rows.find(row => row.item.id === selected.id)!.nested ? 'Indented checklist item' : 'Outdented checklist item';
+    this.change([selected.noteId], { type: 'reorder', noteId: selected.noteId, itemId: selected.id, field, itemText: selected.text }, description, () => {
+      this.prepareChecklist(selected.noteId);
+      for (const [parentId, ordered] of [[undefined, roots], ...children] as [string | undefined, Item[]][]) {
+        const stationary = (item: Item) => item.id !== selected.id && oldParents.get(item.id) === parentId;
+        let siblings = ordered.filter(stationary);
+        for (const [index, item] of ordered.entries()) {
+          if (stationary(item)) {
+            // Normalize raw chains to the visible parent, retaining current ranks
+            // (which an earlier insertion may have re-spaced).
+            this.positionItem(item.id, parentId, this.items.get(item.id)!.get('rank'));
+          } else {
+            const respaced = this.placeItem(item.id, parentId, siblings, index);
+            if (respaced) siblings = siblings.map(sibling => ({ ...sibling, rank: this.items.get(sibling.id)!.get('rank') }));
+            siblings.splice(index, 0, { ...item, parentId, rank: this.items.get(item.id)!.get('rank') });
+          }
+        }
+      }
+    });
+    return true;
+  }
   /** Move body lines ahead of the existing checklist as one undoable edit. */
   convertBodyToChecklist(id: string): boolean {
     const note = this.getNote(id); if (!note || note.trashed) return false;
@@ -709,79 +747,67 @@ export class Vault {
     const groups = checklistGroups(this.getItems(item.get('noteId')));
     const group = groups.find(group => group.root.id === id || group.children.some(child => child.id === id));
     if (!group) return;
-    const parentId = group.root.id === id ? undefined : group.root.id;
-    const siblings = parentId ? group.children : groups.filter(entry => isChecklistGroupChecked(entry) === isChecklistGroupChecked(group)).map(entry => entry.root);
-    const index = siblings.findIndex(entry => entry.id === id), other = siblings[index + direction];
-    if (index < 0 || !other) return;
-    this.moveItemRelative(id, other.id, direction === -1 ? 'before' : 'after', parentId ?? null);
+    const rows = checklistRows(groups.filter(entry => isChecklistGroupChecked(entry) === isChecklistGroupChecked(group)));
+    const index = rows.findIndex(row => row.item.id === id), other = rows[index + direction];
+    if (other) this.reorderChecklistRow(id, other.item.id, direction === -1 ? 'before' : 'after', rows[index].nested);
   }
-  /**
-   * Undefined parent infers the target's visible sibling group; null means root.
-   * A root move targeting a child anchors against that child's whole group.
-   * An explicit parent with target==parent and 'after' inserts the first child.
-   */
+  /** Move one row to a literal slot. Undefined parent infers the target's depth; null means root. */
   moveItemRelative(itemId: string, targetId: string, placement: 'before' | 'after', requestedParent?: string | null): boolean {
+    return this.reorderChecklistRow(itemId, targetId, placement, requestedParent === undefined ? undefined : requestedParent !== null, requestedParent ?? undefined);
+  }
+  private reorderChecklistRow(itemId: string, targetId: string, placement: 'before' | 'after', nested?: boolean, expectedParent?: string, field: 'rank' | 'parentId' = 'rank'): boolean {
     if (itemId === targetId) return false;
     const item = this.items.get(itemId), target = this.items.get(targetId);
     if (!item || !target || !this.projection.sourceIds(item.get('noteId')).includes(target.get('noteId'))) return false;
-    const noteId = item.get('noteId');
-    const groups = checklistGroups(this.getItems(noteId));
-    const sourceGroup = groups.find(group => group.root.id === itemId || group.children.some(child => child.id === itemId));
-    const targetGroup = groups.find(group => group.root.id === targetId || group.children.some(child => child.id === targetId));
-    if (!sourceGroup || !targetGroup || isChecklistGroupChecked(sourceGroup) !== isChecklistGroupChecked(targetGroup)) return false;
-    const parentId = requestedParent === undefined ? targetGroup.root.id === targetId ? undefined : targetGroup.root.id : requestedParent ?? undefined;
-    if (parentId === itemId || (parentId && sourceGroup.root.id === itemId && sourceGroup.children.length)) return false;
-    const parentGroup = parentId ? groups.find(group => group.root.id === parentId) : undefined;
-    if (parentId && !parentGroup) return false;
-    const anchorId = parentId ? targetId : targetGroup.root.id;
-    if (parentId && !(targetId === parentId && placement === 'after') && !parentGroup!.children.some(child => child.id === targetId)) return false;
-    const siblings = parentGroup ? parentGroup.children : groups.filter(group => isChecklistGroupChecked(group) === isChecklistGroupChecked(sourceGroup)).map(group => group.root);
-    const remaining = siblings.filter(entry => entry.id !== itemId);
-    const index = parentId && targetId === parentId ? 0 : remaining.findIndex(entry => entry.id === anchorId) + (placement === 'after' ? 1 : 0);
-    if (index < 0 || (!parentId && anchorId === itemId)) return false;
-    if (siblings.findIndex(entry => entry.id === itemId) === index && (item.get('parentId') ?? undefined) === parentId) return false;
-    this.change([noteId], { type: 'reorder', noteId, itemId, field: 'rank', itemText: item.get('text').toString() }, 'Reordered checklist item', () => {
-      this.prepareChecklist(noteId);
-      if (parentId !== sourceGroup.root.id) this.detachChildDependents(itemId, sourceGroup);
-      this.placeItem(itemId, parentId, remaining, index);
-    });
-    return true;
+    const groups = checklistGroups(this.getItems(item.get('noteId')));
+    const source = groups.find(group => group.root.id === itemId || group.children.some(child => child.id === itemId));
+    const destination = groups.find(group => group.root.id === targetId || group.children.some(child => child.id === targetId));
+    if (!source || !destination || isChecklistGroupChecked(source) !== isChecklistGroupChecked(destination)) return false;
+    const visible = groups.filter(group => isChecklistGroupChecked(group) === isChecklistGroupChecked(source));
+    const rows = checklistRows(visible), selected = rows.find(row => row.item.id === itemId)!;
+    const remaining = rows.filter(row => row !== selected);
+    const index = remaining.findIndex(row => row.item.id === targetId) + (placement === 'after' ? 1 : 0);
+    nested ??= destination.root.id !== targetId;
+    if (nested) {
+      if (index === 0) return false;
+      const parent = remaining.slice(0, index).reverse().find(row => !row.nested) ?? remaining[0];
+      if (expectedParent && expectedParent !== parent.item.id) return false;
+    }
+    remaining.splice(index, 0, { ...selected, nested });
+    return this.changeChecklistLayout(selected.item, visible, remaining, field);
   }
 
-  /** Set a visible root parent, or outdent immediately after the former group. */
+  /** Set a parent by moving just this row, or outdent in its current position. */
   setItemParent(itemId: string, requestedParent?: string | null): boolean {
     const item = this.items.get(itemId); if (!item || item.get('deleted')) return false;
-    const noteId = item.get('noteId'), parentId = requestedParent ?? undefined;
-    const groups = checklistGroups(this.getItems(noteId));
+    const groups = checklistGroups(this.getItems(item.get('noteId')));
     const source = groups.find(group => group.root.id === itemId || group.children.some(child => child.id === itemId));
-    if (!source || parentId === itemId) return false;
-    const currentParent = source.root.id === itemId ? undefined : source.root.id;
-    if (currentParent === parentId && (item.get('parentId') ?? undefined) === parentId) return false;
-    const parent = parentId ? groups.find(group => group.root.id === parentId) : undefined;
-    if (parentId && (!parent || (source.root.id === itemId && source.children.length))) return false;
-    const siblings = (parent ? parent.children : groups.map(group => group.root)).filter(entry => entry.id !== itemId);
-    const index = parent ? siblings.length : currentParent ? siblings.findIndex(entry => entry.id === currentParent) + 1 : Math.max(0, groups.findIndex(group => group.root.id === itemId));
-    this.change([noteId], { type: 'reorder', noteId, itemId, field: 'parentId', itemText: item.get('text').toString() }, parent ? 'Indented checklist item' : 'Outdented checklist item', () => {
-      this.prepareChecklist(noteId);
-      if (parentId !== source.root.id) this.detachChildDependents(itemId, source);
-      this.placeItem(itemId, parentId, siblings, index);
-    });
-    return true;
+    if (!source || requestedParent === itemId) return false;
+    if (requestedParent) {
+      const parent = groups.find(group => group.root.id === requestedParent);
+      if (!parent || (source.root.id === requestedParent && source.root.id !== itemId)) return false;
+      return this.reorderChecklistRow(itemId, parent.children.at(-1)?.id ?? parent.root.id, 'after', true, requestedParent, 'parentId');
+    }
+    if (source.root.id === itemId) return false;
+    const visible = groups.filter(group => isChecklistGroupChecked(group) === isChecklistGroupChecked(source));
+    const rows = checklistRows(visible), selected = rows.find(row => row.item.id === itemId)!;
+    selected.nested = false;
+    return this.changeChecklistLayout(selected.item, visible, rows, 'parentId');
   }
 
   indentItem(itemId: string): boolean {
     const item = this.items.get(itemId); if (!item || item.get('deleted')) return false;
     const groups = checklistGroups(this.getItems(item.get('noteId'))), group = groups.find(group => group.root.id === itemId);
-    if (!group || group.children.length) return false;
+    if (!group) return false;
     const visible = groups.filter(entry => isChecklistGroupChecked(entry) === isChecklistGroupChecked(group));
-    const index = visible.indexOf(group);
-    return index > 0 ? this.setItemParent(itemId, visible[index - 1].root.id) : false;
+    const rows = checklistRows(visible), index = rows.findIndex(row => row.item.id === itemId);
+    if (index === 0) return false;
+    rows[index].nested = true;
+    return this.changeChecklistLayout(rows[index].item, visible, rows, 'parentId');
   }
 
   outdentItem(itemId: string): boolean {
-    const item = this.items.get(itemId); if (!item || item.get('deleted')) return false;
-    const group = checklistGroups(this.getItems(item.get('noteId'))).find(group => group.children.some(child => child.id === itemId));
-    return group ? this.setItemParent(itemId, undefined) : false;
+    return this.setItemParent(itemId, null);
   }
 
   addAttachment(attachment: Attachment) {

@@ -52,7 +52,7 @@ test('cross-source moves, indentation and insertion use the whole logical list a
   const merged = vault.mergeNotes([first, second]);
   vault.undoManager.clear();
   assert.equal(vault.moveItemRelative(b, a, 'before'), true);
-  assert.deepEqual(families(vault, merged), [[b, [child]], [a, []], [leaf, []]]);
+  assert.deepEqual(families(vault, merged), [[b, []], [a, []], [leaf, [child]]]);
   vault.undo(); assert.deepEqual(families(vault, merged), [[a, []], [leaf, []], [b, [child]]]);
   assert.equal(vault.setItemParent(leaf, b), true);
   assert.deepEqual(families(vault, merged), [[a, []], [b, [child, leaf]]]);
@@ -66,6 +66,52 @@ test('cross-source moves, indentation and insertion use the whole logical list a
   assert.deepEqual(families(vault, merged), [[a, []], [b, [child, inserted]], [leaf, []]]);
   assert.equal(vault.indentItem(leaf), true);
   assert.deepEqual(families(vault, merged), [[a, []], [b, [child, inserted, leaf]]]);
+});
+
+test('indenting a merged parent records every new sibling parent and undo preserves offline child edits', t => {
+  const desktop = model(t), first = desktop.createNote('checklist'), second = desktop.createNote('checklist'), third = desktop.createNote('checklist');
+  const a = desktop.addItem(first, 'A'), b = desktop.addItem(second, 'B'), c = desktop.addItem(third, 'C'), d = desktop.addItem(third, 'D');
+  const merged = desktop.mergeNotes([first, second, third]);
+  desktop.indentItem(c);
+  const phone = model(t, desktop), before = desktop.captureHistoryState([merged]);
+  const cRecord = desktop.items.get(c), cText = cRecord!.get('text');
+  desktop.undoManager.clear();
+  assert.equal(desktop.indentItem(b), true);
+  assert.deepEqual(families(desktop, merged), [[a, [b, c]], [d, []]]);
+  const changes = diffHistory(before, desktop.captureHistoryState([merged]));
+  assert.deepEqual(changes.filter(change => change.op === 'item-parent').map(change => [change.sourceId, change.itemId, change.value]).sort(), [[second, b, a], [third, c, a]].sort());
+  phone.setItemText(c, 'C edited offline'); phone.toggleItem(c);
+  const late = phone.addItem(merged, 'Late child', b);
+  sync(desktop, phone);
+  desktop.undo(); sync(desktop, phone);
+  assert.equal(desktop.items.get(b)!.get('parentId'), null);
+  assert.equal(desktop.items.get(c)!.get('parentId'), b);
+  assert.equal(desktop.items.get(late)!.get('parentId'), b);
+  assert.equal(desktop.items.get(c), cRecord); assert.equal(cRecord!.get('text'), cText);
+  assert.equal(cRecord!.get('noteId'), third);
+  assert.equal(cText.toString(), 'C edited offline'); assert.equal(cRecord!.get('checked'), true);
+});
+
+test('outdenting across merged sources records adopted children and preserves their offline edits through undo', t => {
+  const desktop = model(t), first = desktop.createNote('checklist'), second = desktop.createNote('checklist');
+  const a = desktop.addItem(first, 'A'), b = desktop.addItem(first, 'B'), c = desktop.addItem(second, 'C'), d = desktop.addItem(second, 'D');
+  const merged = desktop.mergeNotes([first, second]);
+  for (const id of [b, c, d]) desktop.indentItem(id);
+  const phone = model(t, desktop), before = desktop.captureHistoryState([merged]);
+  const records = [b, c, d].map(id => desktop.items.get(id));
+  desktop.undoManager.clear();
+  assert.equal(desktop.outdentItem(b), true);
+  assert.deepEqual(families(desktop, merged), [[a, []], [b, [c, d]]]);
+  const changes = diffHistory(before, desktop.captureHistoryState([merged]));
+  assert.deepEqual(changes.filter(change => change.op === 'item-parent').map(change => [change.sourceId, change.itemId, change.value]).sort(), [[first, b, null], [second, c, b], [second, d, b]].sort());
+  phone.setItemText(c, 'C edited offline'); phone.toggleItem(d);
+  sync(desktop, phone);
+  desktop.undo(); sync(desktop, phone);
+  assert.deepEqual(families(desktop, merged), [[a, [b, c, d]]]);
+  assert.equal(desktop.items.get(c)!.get('noteId'), second);
+  assert.equal(desktop.items.get(c)!.get('text').toString(), 'C edited offline');
+  assert.equal(desktop.items.get(d)!.get('checked'), true);
+  [b, c, d].forEach((id, index) => assert.equal(desktop.items.get(id), records[index]));
 });
 
 test('checking a cross-source family timestamps and records every changed owning source, and leaves other sources untouched', t => {
@@ -144,7 +190,7 @@ test('legacy graph-only merges have zero read-time writes and materialize ranks 
   vault.getNotes(); vault.getItems(second);
   assert.equal(writes, 0); assert.deepEqual(Y.encodeStateAsUpdate(vault.doc), before);
   vault.undoManager.clear(); vault.moveItemRelative(b, az, 'before');
-  assert.deepEqual(ids(vault, first), [a, ac, b, bc, az]);
+  assert.deepEqual(ids(vault, first), [a, ac, b, az, bc]);
   assert.equal(vault.notes.get(first)!.get('unifiedChecklist'), true);
   assert.equal(vault.notes.get(second)!.get('unifiedChecklist'), true);
   assert.equal(vault.undoManager.undoStack.length, 1);

@@ -72,7 +72,7 @@ test('history ordering keeps descendants with roots and legacy snapshots retain 
   assert.equal(raw.sources.note.sortOrderDate, undefined, 'Rendering leaves the supplied snapshot unchanged');
 });
 
-test('indent, group moves, child reparenting and outdent have exact immutable previews after reload', t => {
+test('indent, single-row moves, child reparenting and outdent have exact immutable previews after reload', t => {
   const vault = vaultFor(t), id = vault.createNote('checklist');
   const parent = vault.addItem(id, 'Parent'), child = vault.addItem(id, 'Child'), other = vault.addItem(id, 'Other');
   const versions = [previewMatches(vault, id)];
@@ -82,7 +82,7 @@ test('indent, group moves, child reparenting and outdent have exact immutable pr
   assert.ok(diffHistory(versions.at(-2)!.state, versions.at(-1)!.state).some(patch => patch.op === 'item-parent' && patch.itemId === child && patch.value === parent));
 
   vault.moveItemRelative(parent, other, 'after');
-  assert.deepEqual(vault.getItems(id).map(item => item.id), [other, parent, child]);
+  assert.deepEqual(vault.getItems(id).map(item => item.id), [child, other, parent]);
   versions.push(previewMatches(vault, id));
   vault.setItemParent(child, other);
   assert.equal(vault.getItems(id).find(item => item.id === child)!.parentId, other);
