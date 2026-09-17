@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
-import { mkdir, mkdtemp, readFile, writeFile, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, writeFile, rename, rm } from 'node:fs/promises';
 import path from 'node:path';
 import { setTimeout as pause } from 'node:timers/promises';
 import { buildDir, sourceDir } from '../paths.ts';
@@ -54,18 +54,24 @@ const timer = setInterval(() => {
     assert.fail(`Timed out awaiting ${kind} ${attempt}: ${output}`);
   };
   const read = async (port: number) => (await fetch(`http://127.0.0.1:${port}`, { signal: AbortSignal.timeout(1000) })).text();
-  await event('build', 1); await writeFile(path.join(work, 'release-1'), 'pass');
+  const release = async (attempt: number, result: 'pass' | 'fail') => {
+    const filename = path.join(work, `release-${attempt}`);
+    // The fake compiler polls for this file; publish only the complete result.
+    await writeFile(`${filename}.tmp`, result);
+    await rename(`${filename}.tmp`, filename);
+  };
+  await event('build', 1); await release(1, 'pass');
   const first = await event('ready', 1);
   assert.equal(await read(first.port), '1');
   await writeFile(path.join(work, 'server-rust/change.rs'), 'build 2');
   await event('build', 2);
   assert.equal(await read(first.port), '1', 'The current server must stay up during compilation');
-  await writeFile(path.join(work, 'release-2'), 'fail');
+  await release(2, 'fail');
   await event('failed', 2);
   assert.equal(await read(first.port), '1', 'A failed build must preserve the running server');
   await writeFile(path.join(work, 'server-rust/change.rs'), 'build 3');
   await event('build', 3); assert.equal(await read(first.port), '1');
-  await writeFile(path.join(work, 'release-3'), 'pass');
+  await release(3, 'pass');
   const next = await event('ready', 3);
   await event('stopped', 1); assert.equal(await read(next.port), '3');
   await writeFile(path.join(work, 'server-rust/change.rs'), 'build 4');
