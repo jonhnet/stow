@@ -19,7 +19,7 @@ From the checkout, run `./setup.sh` and `npm run dev`, then open `http://localho
 
 `setup.sh` installs the locked JavaScript dependencies and builds the Rust server. Run it again after dependency changes. Dependencies belong in `../build/`, so do not run `npm install` inside the checkout. Stop Stow before deleting the disposable build directory; keep `data/` and private configuration.
 
-`run-dev.sh`, `import-keep.sh`, `restore-keep-indentation.sh`, and `reset-account.sh` source the sibling `.env` as shell settings, with file values overriding existing shell variables. `run-dev.sh` requires the credential for the selected authentication mode. Direct `npm run dev` and `npm start` require server settings to be exported in their environment; they do not source that file. Vite separately reads workspace env files for its browser build.
+`run-dev.sh`, `import-keep.sh`, and `reset-account.sh` source the sibling `.env` as shell settings, with file values overriding existing shell variables. `run-dev.sh` requires the credential for the selected authentication mode. Direct `npm run dev` and `npm start` require server settings to be exported in their environment; they do not source that file. Vite separately reads workspace env files for its browser build.
 
 To use another device during development, configure an HTTPS proxy and run:
 
@@ -92,4 +92,4 @@ Viewed originals use a 50 MiB cache; thumbnails download automatically. Pending 
 
 The [architecture](architecture.md) documents stable note/item identities, ordering, merges, undo, permanent deletion, and image ownership. Undo/Redo survives reload and PWA restart in the same browser, with a combined 200-step limit per stack. Cleanup keeps at most three inactive stacks, expiring them after a week without changes; live tabs retain their own stacks. Individual steps have no age limit. Saved server history restores copies across devices. Intermediate offline edits may merge into one server-observed version.
 
-See [label identity](label-model.md), [archive history cleanup](archive-history-cleanup.md), and [storage protocol](storage-protocol.md) for their current contracts. Administration and measurement procedures live in [Keep import](import-keep.md), [indentation recovery](restore-keep-indentation.md), [account reset](account-reset.md), [startup diagnostics](startup-diagnostics.md), and [performance tools](performance.md).
+See [label identity](label-model.md), [archive history cleanup](archive-history-cleanup.md), and [storage protocol](storage-protocol.md) for their current contracts. Administration and measurement procedures live in [Keep import](import-keep.md), [account reset](account-reset.md), [startup diagnostics](startup-diagnostics.md), and [performance tools](performance.md).

@@ -38,7 +38,7 @@ Saved plans and staged input remain under `../build/keep-import-stow/` on the ho
 
 If you installed with a custom name and state directory, keep supplying `--name` and `--state-dir` to `self-host.py`, and `--state-dir` to every import command; the importer reads the service name from its settings. `--build-network host` is available for machines that needed it during hosting setup. To intentionally replace existing notes, add `--replace` to the preview command and read [replacement behavior](#append-replace-and-retry) first.
 
-Takeout import requires no Google credentials. Takeout omits checklist nesting, so imported checklists are flat; text and checked states are retained. Restore nesting manually or use the limited [saved-page recovery tool](restore-keep-indentation.md).
+Takeout import requires no Google credentials. Takeout omits checklist nesting, so imported checklists are flat; text and checked states are retained. Restore nesting manually in Stow.
 
 ## Development and other server installations
 
@@ -121,10 +121,6 @@ Each note's exact original JSON is retained as a content-addressed server blob. 
 
 
 The import creates no fabricated edit history or session undo entries. A later Stow edit records the imported state as its starting point and retains subsequent authored changes normally. Existing history and server blobs from replaced sources remain retained, although discarded notes disappear from the overview.
-
-## Recover indentation from a saved Keep page
-
-Takeout omits checklist nesting. A saved copy of the live Keep page can retain explicit indentation for the rows it contains, but unloaded notes and truncated rows limit its coverage. [Restore Keep indentation](restore-keep-indentation.md) describes the separate preview/apply script for recovering unambiguous relationships in an existing import.
 
 ## Backups and recovery
 
