@@ -17,6 +17,7 @@ import { redactEditDraft } from './edit-draft';
 import { assertCurrentSchema } from './current-schema';
 import type { ChecklistConversion } from './converted-checklist';
 import { TEXT_MASK_PREFIX, textMasks, visibleTextRuns, type TextMask } from './converted-text';
+import { limitUndo } from './persistent-undo';
 
 type RecordMap = Y.Map<any>;
 type ChecklistRowPosition = { item: Item; nested: boolean };
@@ -134,6 +135,7 @@ export class Vault {
       }
     };
     this.undoManager.on('stack-item-added', rememberSources); this.undoManager.on('stack-item-updated', rememberSources);
+    this.undoManager.on('stack-item-added', () => limitUndo(this.undoManager));
     this.doc.on('afterTransaction', transaction => {
       if (transaction.changed.size && transaction.origin !== localOrigin && transaction.origin !== boundaryOrigin && transaction.origin !== this.undoManager) {
         const draft = this.editDraft;

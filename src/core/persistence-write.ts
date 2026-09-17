@@ -13,6 +13,8 @@ export interface PersistenceWrite {
   edit?: { owner: string; draft: PendingEdit | null };
   retired: string[];
   undo?: { owner: string; state: SavedUndo };
+  // The requesting page holds each owner's exclusive lock until this commits.
+  undoCleanup?: { owner: string; state?: SavedUndo }[];
 }
 export interface CompactionMetrics { totalMs: number; applyMs: number; encodeMs: number; inputBytes: number; outputBytes: number }
 export interface PersistenceWriteResult { correction?: Uint8Array; compaction?: CompactionMetrics }
@@ -32,6 +34,10 @@ export async function writePersistenceBatch(db: PersistenceConnection, request: 
   try {
     await Promise.all(batch.map(update => updatesStore.add(update)));
     if (request.undo) await transaction.objectStore('undo').put(request.undo.state, request.undo.owner);
+    for (const entry of request.undoCleanup ?? []) {
+      if (entry.state) await transaction.objectStore('undo').put(entry.state, entry.owner);
+      else await transaction.objectStore('undo').delete(entry.owner);
+    }
     if (edit) {
       // Pending recovery contains source timestamps only. A stale writer cannot
       // retain historical text; recovery rereads durable current-state deletions.

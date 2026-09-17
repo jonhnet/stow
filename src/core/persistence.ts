@@ -8,7 +8,7 @@ import { isEmptyUpdate, applyStoredUpdates } from './yjs-updates';
 import type { PendingEdit } from './history-types';
 import type { EditOwnership } from './edit-ownership';
 import { redactPendingEdit } from './edit-draft';
-import { restoreUndo, saveUndo } from './persistent-undo';
+import { capUndo, INACTIVE_UNDO_LIMIT, INACTIVE_UNDO_MAX_AGE, restoreUndo, saveUndo, type SavedUndo } from './persistent-undo';
 
 export interface EditRecovery {
   owner: string;
@@ -52,11 +52,13 @@ export class LocalPersistence {
   private releaseUndo?: () => void;
   private undoVersion = 0;
   private undoCompleted = 0;
+  private undoCleanupRequested = false;
 
   constructor(private readonly doc: Y.Doc, private readonly options: PersistenceOptions) {
     this.writer = options.writer ?? browserPersistenceWriter(options.databaseName);
     this.doc.on('afterTransactionCleanup', this.prepareUpdate);
     if (options.undo) {
+      this.undoCleanupRequested = true;
       for (const event of undoEvents) options.undo.manager.on(event, this.undoChanged);
       this.doc.on('afterTransaction', this.undoTransaction);
     }
@@ -163,7 +165,9 @@ export class LocalPersistence {
         this.doc.gc = false;
         try {
           applyStoredUpdates(this.doc, updates, this);
-          if (undo) restoreUndo(this.options.undo!.manager, undo, this);
+          if (undo && restoreUndo(this.options.undo!.manager, undo, this)) {
+            this.undoVersion++; this.compactRequested++;
+          }
           if (gc) Y.tryGc(Y.createDeleteSetFromStructStore(this.doc.store), this.doc.store, this.doc.gcFilter);
         } finally { this.doc.gc = gc; }
         startupMark('updates-apply-end');
@@ -188,7 +192,7 @@ export class LocalPersistence {
     }
   }
 
-  private hasPendingWork() { return this.pending.length > 0 || this.compactRequested > this.compactCompleted || this.draftVersion > this.draftCompleted || this.retired.size > 0 || this.undoVersion > this.undoCompleted; }
+  private hasPendingWork() { return this.pending.length > 0 || this.compactRequested > this.compactCompleted || this.draftVersion > this.draftCompleted || this.retired.size > 0 || this.undoVersion > this.undoCompleted || this.undoCleanupRequested; }
 
   private async openUndo() {
     const undo = this.options.undo;
@@ -202,13 +206,60 @@ export class LocalPersistence {
       .sort((a, b) => Number(b.owner === undo.preferredOwner) - Number(a.owner === undo.preferredOwner) || b.time - a.time);
     for (const { owner } of candidates) {
       const release = await undo.ownership.acquire(`undo:${owner}`, true);
-      if (release) { this.undoOwner = owner; this.releaseUndo = release; undo.onOwner?.(owner); return; }
+      if (!release) continue;
+      try {
+        // Cleanup or another opener may have changed this record since listing.
+        const saved = await this.db!.get('undo', owner);
+        if (!saved || saved.updatedAt <= Date.now() - INACTIVE_UNDO_MAX_AGE) continue;
+        this.undoOwner = owner; this.releaseUndo = release; undo.onOwner?.(owner); return;
+      } finally { if (this.releaseUndo !== release) release(); }
     }
     this.undoOwner = crypto.randomUUID();
     this.releaseUndo = await undo.ownership.acquire(`undo:${this.undoOwner}`, false) ?? undefined;
     if (!this.releaseUndo) throw new Error('Could not acquire this page’s Undo recovery lock.');
     undo.onOwner?.(this.undoOwner);
     if (undo.manager.canUndo() || undo.manager.canRedo()) this.undoVersion++;
+  }
+
+  private async cleanupUndo() {
+    const undo = this.options.undo!;
+    // Serialize cleaners, and use the same owner locks as recovery. A live or
+    // concurrently reopening tab keeps its history even when it looks old.
+    const maintenance = await undo.ownership.acquire('undo-maintenance', true);
+    if (!maintenance) return;
+    const releases: (() => void)[] = [];
+    try {
+      const inactive: { owner: string; state: SavedUndo }[] = [];
+      for (const owner of await this.db!.getAllKeys('undo')) {
+        if (owner === this.undoOwner) continue;
+        const release = await undo.ownership.acquire(`undo:${owner}`, true);
+        if (!release) continue;
+        releases.push(release);
+        const state = await this.db!.get('undo', owner);
+        if (state) inactive.push({ owner, state });
+      }
+      inactive.sort((a, b) => b.state.updatedAt - a.state.updatedAt || a.owner.localeCompare(b.owner));
+      const changes: { owner: string; state?: SavedUndo }[] = [];
+      let retained = 0;
+      for (const { owner, state } of inactive) {
+        if (state.updatedAt <= Date.now() - INACTIVE_UNDO_MAX_AGE || !state.undoStack.length && !state.redoStack.length || retained >= INACTIVE_UNDO_LIMIT) {
+          changes.push({ owner });
+        } else {
+          retained++;
+          const capped = capUndo(state);
+          if (capped !== state) changes.push({ owner, state: capped });
+        }
+      }
+      if (!changes.length) return;
+      // Retire the records and release their retained content atomically. Keep
+      // all owner locks through worker completion, including a failed write.
+      const result = await this.writer.write(this.db!, { batch: [], forceCompact: true,
+        vector: Y.encodeStateVector(this.doc), retired: [], undoCleanup: changes }, () => startupMark('idb-compact-start'));
+      if (result.compaction) startupMark('idb-compact-end');
+      if (result.correction && !isEmptyUpdate(result.correction)) Y.applyUpdate(this.doc, result.correction, this);
+    } finally {
+      releases.forEach(release => release()); maintenance();
+    }
   }
 
   private async loadStoredUpdates() {
@@ -243,6 +294,11 @@ export class LocalPersistence {
   private async writePending() {
     if (!this.db) throw new Error('Local storage is not open.');
     while (this.hasPendingWork()) {
+      if (this.undoCleanupRequested) {
+        await this.cleanupUndo();
+        this.undoCleanupRequested = false;
+        continue;
+      }
       const batch = this.pending.slice();
       const compactVersion = this.compactRequested;
       const forceCompact = compactVersion > this.compactCompleted;
@@ -269,6 +325,7 @@ export class LocalPersistence {
       // A cleanup update arriving during this transaction requests another
       // compaction; acknowledging this one cannot consume that newer request.
       this.compactCompleted = compactVersion;
+      if (result.compaction && this.options.undo) this.undoCleanupRequested = true;
       this.notifyPending();
     }
   }

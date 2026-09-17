@@ -1,6 +1,9 @@
 import * as Y from 'yjs';
 
 type StackItem = Y.UndoManager['undoStack'][number];
+export const UNDO_LIMIT = 200;
+export const INACTIVE_UNDO_LIMIT = 3;
+export const INACTIVE_UNDO_MAX_AGE = 7 * 24 * 60 * 60 * 1000;
 export interface SavedUndo {
   version: 1;
   updatedAt: number;
@@ -8,6 +11,32 @@ export interface SavedUndo {
   redoStack: StackItem[];
   // Yjs updates encode CRDT content, but not the links made by UndoManager.
   redone: { id: Y.ID; length: number; target: Y.ID }[];
+}
+
+/** Keep a contiguous path back/forward from the present, favoring Undo when
+ * upgrading an oversized old stack. Redo's next step is at the array's end. */
+export function capUndo<T extends Pick<SavedUndo, 'undoStack' | 'redoStack'>>(state: T): T {
+  if (state.undoStack.length + state.redoStack.length <= UNDO_LIMIT) return state;
+  const undoStack = state.undoStack.slice(-UNDO_LIMIT);
+  const redoCount = UNDO_LIMIT - undoStack.length;
+  return { ...state, undoStack, redoStack: redoCount ? state.redoStack.slice(-redoCount) : [] };
+}
+
+export function limitUndo(manager: Y.UndoManager): boolean {
+  const kept = capUndo({ undoStack: manager.undoStack, redoStack: manager.redoStack });
+  if (kept.undoStack === manager.undoStack && kept.redoStack === manager.redoStack) return false;
+  const removedUndo = manager.undoStack.slice(0, manager.undoStack.length - kept.undoStack.length);
+  const removedRedo = manager.redoStack.slice(0, manager.redoStack.length - kept.redoStack.length);
+  manager.doc.transact(() => {
+    // Native clear releases the discarded entries' keep flags. Re-pin surviving
+    // ranges and parents before GC: multiple entries can retain the same parent.
+    manager.undoStack = removedUndo; manager.redoStack = removedRedo;
+    manager.clear();
+    manager.undoStack = kept.undoStack; manager.redoStack = kept.redoStack;
+    retainUndo(manager.doc, kept);
+    if (manager.doc.gc) Y.tryGc(Y.mergeDeleteSets([...removedUndo, ...removedRedo].map(entry => entry.deletions)), manager.doc.store, manager.doc.gcFilter);
+  }, 'undo-retention');
+  return true;
 }
 
 export function saveUndo(manager: Y.UndoManager): SavedUndo {
@@ -30,7 +59,7 @@ export function redactUndo(saved: SavedUndo, deleted: { has(id: string): boolean
 
 /** Call after loading with gc disabled, before collecting the local log. Only
  * Undo's deleted ranges and their parents need their original content retained. */
-export function retainUndo(doc: Y.Doc, saved: SavedUndo, origin?: unknown) {
+export function retainUndo(doc: Y.Doc, saved: Pick<SavedUndo, 'undoStack' | 'redoStack'>, origin?: unknown) {
   doc.transact(transaction => {
     for (const entry of [...saved.undoStack, ...saved.redoStack]) {
       Y.iterateDeletedStructs(transaction, entry.deletions, struct => {
@@ -49,7 +78,7 @@ export function retainUndo(doc: Y.Doc, saved: SavedUndo, origin?: unknown) {
 
 export function restoreUndo(manager: Y.UndoManager, saved: SavedUndo, origin?: unknown) {
   const doc = manager.doc;
-  const kept = redactUndo(saved, doc.getMap('deletedNotes'));
+  const kept = capUndo(redactUndo(saved, doc.getMap('deletedNotes')));
   retainUndo(doc, kept, origin);
   doc.transact(transaction => {
     for (const link of kept.redone) {
@@ -70,4 +99,5 @@ export function restoreUndo(manager: Y.UndoManager, saved: SavedUndo, origin?: u
   manager.undoStack = kept.undoStack;
   manager.redoStack = kept.redoStack;
   manager.stopCapturing();
+  return kept.undoStack.length !== saved.undoStack.length || kept.redoStack.length !== saved.redoStack.length;
 }
