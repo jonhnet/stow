@@ -6,6 +6,8 @@ use std::{fs, path::Path};
 use tempfile::TempDir;
 use yrs::{Doc, Map, MapPrelim, MapRef, Out, ReadTxn, Text, TextPrelim, Transact};
 
+mod account_metadata;
+mod account_metadata_api;
 mod api;
 mod deletion;
 mod history;

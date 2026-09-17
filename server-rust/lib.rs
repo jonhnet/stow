@@ -1,5 +1,6 @@
 #![forbid(unsafe_code)]
 
+pub mod account_metadata;
 pub mod account_reset;
 pub mod cache;
 pub mod crdt;

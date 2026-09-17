@@ -1,5 +1,6 @@
 //! Account incarnations only change through the explicit offline administrator command.
 use crate::{
+    account_metadata,
     crdt::{string, truthy},
     error::{Error, Result},
     identity::{self, AuthMode},
@@ -79,14 +80,29 @@ pub fn reset(options: &Value) -> Result<Value> {
             "The selected account vault is not a directory.",
         ));
     }
+    if let Some(metadata) = account_metadata::read(&previous)?
+        && (metadata.user != user
+            || metadata.auth_mode != AuthMode::Proxy
+            || metadata.vault_id != old)
+    {
+        return Err(Error::invalid(format!(
+            "Account metadata in {} does not match the selected account and vault.",
+            previous.join("account.json").display()
+        )));
+    }
     if !apply {
         return Ok(json!({"user":user,"previousVaultId":old,"vaultId":old,"applied":false}));
     }
+    // The stopped-server requirement serializes metadata recording with sign-in.
+    // Preserve the known owner alongside both incarnations before committing the
+    // new identity. Metadata does not choose the account or replacement vault.
+    account_metadata::record(&previous, user, AuthMode::Proxy, &old)?;
     let id = hex::encode(rand::random::<[u8; 32]>());
     let fresh = directory.join("users").join(&id);
     fs::create_dir(&fresh)?;
     use std::os::unix::fs::PermissionsExt;
     fs::set_permissions(&fresh, fs::Permissions::from_mode(0o700))?;
+    account_metadata::record(&fresh, user, AuthMode::Proxy, &id)?;
     sync_directory(&directory.join("users"))?;
     let backups = directory.join("reset-backups");
     mkdir_durable(&backups)?;

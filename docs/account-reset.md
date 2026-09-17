@@ -3,6 +3,9 @@
 `reset-account.sh` replaces one proxy account's vault with a new empty CRDT and a
 new browser storage identity. It preserves the previous vault, including images,
 under `DATA_DIR/reset-backups/`. Other accounts and proxy authentication stay unchanged.
+Both directories receive an `account.json` identifying the selected owner and
+their respective vault IDs; an existing record with conflicting ownership stops
+the reset without changing data.
 
 1. Read the account's current `vaultId` from its authenticated `/api/session` response.
 2. Preview: `./reset-account.sh --user owner@example.com --vault CURRENT_VAULT_ID`.

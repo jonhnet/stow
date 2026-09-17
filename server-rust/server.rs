@@ -1,6 +1,6 @@
 use crate::storage::DurableUpdate;
 use crate::{
-    account_reset,
+    account_metadata, account_reset,
     cache::{Cache, Lease},
     crdt::{CURRENT_SCHEMA, Ids},
     history_state,
@@ -206,6 +206,7 @@ impl Config {
         })
     }
 }
+#[derive(Clone)]
 struct Principal {
     user: String,
     vault_id: String,
@@ -276,6 +277,7 @@ pub struct ServerState {
     secret: Vec<u8>,
     vaults: Cache<Account>,
     incarnations: account_reset::Incarnations,
+    metadata_lock: Mutex<()>,
     transfer_budget: Budget,
     failures: Mutex<HashMap<String, Attempt>>,
     reports: Mutex<Vec<Report>>,
@@ -381,13 +383,45 @@ impl ServerState {
             Ok(())
         }
     }
+    fn account_directory(&self, id: &str) -> PathBuf {
+        if self.config.auth_mode == AuthMode::Password {
+            self.config.data_dir.clone()
+        } else {
+            self.config.data_dir.join("users").join(id)
+        }
+    }
+    // Serialize first publication independently of the vault cache: session
+    // checks can identify an existing vault even when its CRDT cannot open.
+    fn record_account(&self, principal: &Principal, create: bool) -> Result<()> {
+        let _guard = self
+            .metadata_lock
+            .lock()
+            .map_err(|_| Error::invalid("Account metadata unavailable"))?;
+        let directory = self.account_directory(&principal.vault_id);
+        match std::fs::metadata(&directory) {
+            Ok(metadata) if metadata.is_dir() => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                if !create {
+                    return Ok(());
+                }
+                mkdir_durable(&directory)?;
+            }
+            Err(error) => return Err(error.into()),
+            _ => return Err(Error::invalid("Account vault is not a directory")),
+        }
+        let user = match self.config.auth_mode {
+            AuthMode::Proxy => principal.user.as_str(),
+            AuthMode::Password => "owner",
+        };
+        account_metadata::record(&directory, user, self.config.auth_mode, &principal.vault_id)
+    }
+    fn owned_account(&self, principal: &Principal) -> Result<Lease<Account>> {
+        self.record_account(principal, true)?;
+        self.account(&principal.vault_id)
+    }
     fn account(&self, id: &str) -> Result<Lease<Account>> {
         self.vaults.acquire(id, || {
-            let directory = if self.config.auth_mode == AuthMode::Password {
-                self.config.data_dir.clone()
-            } else {
-                self.config.data_dir.join("users").join(id)
-            };
+            let directory = self.account_directory(id);
             Ok(Account {
                 vault: Vault::open(&directory, self.time())?,
                 clients: BTreeMap::new(),
@@ -411,6 +445,41 @@ impl ServerState {
         .await
         .map_err(|e| Error::invalid(format!("Vault worker failed: {e}")))?
     }
+    async fn with_owned_account<T: Send + 'static>(
+        self: &Arc<Self>,
+        principal: Principal,
+        operation: impl FnOnce(&mut Account) -> Result<T> + Send + 'static,
+    ) -> Result<T> {
+        let state = self.clone();
+        tokio::task::spawn_blocking(move || {
+            let account = state.owned_account(&principal)?;
+            let mut account = account
+                .lock()
+                .map_err(|_| Error::invalid("Vault unavailable"))?;
+            operation(&mut account)
+        })
+        .await
+        .map_err(|e| Error::invalid(format!("Vault worker failed: {e}")))?
+    }
+    fn account_owner(&self, id: &str) -> String {
+        match account_metadata::read(&self.account_directory(id)) {
+            Ok(Some(metadata))
+                if metadata.vault_id == id
+                    && metadata.auth_mode == self.config.auth_mode
+                    && account_reset::resolve(
+                        &self.secret,
+                        metadata.auth_mode,
+                        &metadata.user,
+                        &self.incarnations,
+                    ) == id =>
+            {
+                format!("owner {:?} ({:?})", metadata.user, metadata.auth_mode)
+            }
+            Ok(Some(_)) => "owner unknown; account.json does not match this vault".into(),
+            Ok(None) => "owner unknown".into(),
+            Err(error) => format!("owner unknown; {error}"),
+        }
+    }
     pub async fn run_maintenance(self: &Arc<Self>) -> Result<()> {
         let _guard = self.maintenance.lock().await;
         let ids = if self.config.auth_mode == AuthMode::Password {
@@ -431,8 +500,9 @@ impl ServerState {
                 break;
             }
             let time = self.time();
+            let directory = self.account_directory(&id);
             if let Err(error) = self
-                .with_account(id, move |account| {
+                .with_account(id.clone(), move |account| {
                     if let Some(clean) = account.vault.sweep(time)? {
                         account
                             .notice(json!({"type":"history-changed","sourceIds":clean.source_ids}));
@@ -441,7 +511,10 @@ impl ServerState {
                 })
                 .await
             {
-                eprintln!("Stow could not complete archived-history maintenance: {error}");
+                let owner = self.account_owner(&id);
+                eprintln!(
+                    "Stow could not complete archived-history maintenance for vault {directory:?} ({owner}): {error}"
+                );
             }
         }
         Ok(())
@@ -495,6 +568,7 @@ pub async fn start(config: Config) -> Result<Running> {
         secret,
         vaults: Cache::default(),
         incarnations,
+        metadata_lock: Mutex::new(()),
         transfer_budget: Budget::default(),
         failures: Mutex::new(HashMap::new()),
         reports: Mutex::new(Vec::new()),
@@ -504,7 +578,15 @@ pub async fn start(config: Config) -> Result<Running> {
         maintenance: tokio::sync::Mutex::new(()),
     });
     if state.config.auth_mode == AuthMode::Password {
-        state.with_account(state.password_id(), |_| Ok(())).await?;
+        state
+            .with_owned_account(
+                Principal {
+                    user: "owner".into(),
+                    vault_id: state.password_id(),
+                },
+                |_| Ok(()),
+            )
+            .await?;
     }
     state.run_maintenance().await?;
     let listener = TcpListener::bind((state.config.host.as_str(), state.config.port)).await?;
@@ -639,6 +721,13 @@ async fn handle_http(
                         || single_header(&headers, "x-stow-schema") != Some(CURRENT_SCHEMA))
                 {
                     value["syncRejection"] = client_update_required();
+                } else {
+                    let copy = state.clone();
+                    tokio::task::spawn_blocking(move || copy.record_account(&p, false))
+                        .await
+                        .map_err(|e| {
+                            Error::invalid(format!("Account metadata worker failed: {e}"))
+                        })??;
                 }
                 json_response(200, value)
             }
@@ -798,12 +887,13 @@ async fn handle_http(
     {
         state.bind(&headers, &principal)?;
     }
-    let id = principal.vault_id;
     let time = state.time();
     if path == "/api/storage" && read {
         return Ok(json_response(
             200,
-            state.with_account(id, |a| a.vault.storage()).await?,
+            state
+                .with_owned_account(principal, |a| a.vault.storage())
+                .await?,
         ));
     }
     if path == "/api/history" && read {
@@ -836,7 +926,7 @@ async fn handle_http(
             .unwrap_or(Some(50))
             .ok_or_else(|| Error::request(400, "Invalid history query"))?;
         let result = state
-            .with_account(id, move |a| {
+            .with_owned_account(principal, move |a| {
                 a.vault.history_read(|v| {
                     let sources = history_state::groups(&v.doc)
                         .into_iter()
@@ -865,7 +955,7 @@ async fn handle_http(
             .map_err(|_| Error::request(400, "Invalid history identity"))?
             .into_owned();
         let result = state
-            .with_account(id, move |a| {
+            .with_owned_account(principal, move |a| {
                 a.vault.history_read(|v| {
                     if version == "export" {
                         v.history.export()
@@ -888,7 +978,7 @@ async fn handle_http(
                 Error::request(400, "Specify whether history compression is enabled.")
             })?;
         let storage = state
-            .with_account(id, move |a| {
+            .with_owned_account(principal, move |a| {
                 a.vault.set_compression(enabled)?;
                 let storage = a.vault.storage()?;
                 a.notice(json!({"type":"history-changed"}));
@@ -908,7 +998,7 @@ async fn handle_http(
         return Ok(json_response(
             200,
             state
-                .with_account(id, move |a| {
+                .with_owned_account(principal, move |a| {
                     a.vault.set_retention(enabled, time)?;
                     a.vault.storage()
                 })
@@ -934,7 +1024,7 @@ async fn handle_http(
         {
             return Err(Error::request(400, "Invalid archived-note selection."));
         }
-        return Ok(json_response(200,state.with_account(id,move|a|{let clean=a.vault.discard_history(&sources,Some(&token),time)?;if clean.cleaned_note_count>0 { a.notice(json!({"type":"history-changed","sourceIds":clean.source_ids})); }Ok(json!({"storage":a.vault.storage()?,"cleanedNoteCount":clean.cleaned_note_count}))}).await?));
+        return Ok(json_response(200,state.with_owned_account(principal,move|a|{let clean=a.vault.discard_history(&sources,Some(&token),time)?;if clean.cleaned_note_count>0 { a.notice(json!({"type":"history-changed","sourceIds":clean.source_ids})); }Ok(json!({"storage":a.vault.storage()?,"cleanedNoteCount":clean.cleaned_note_count}))}).await?));
     }
     if let Some(blob) = path.strip_prefix("/api/blobs/") {
         let (hash, thumbnail) = blob
@@ -958,7 +1048,7 @@ async fn handle_http(
                 ));
             }
             state
-                .with_account(id, move |a| a.vault.upload(&hash, &sources, &bytes))
+                .with_owned_account(principal, move |a| a.vault.upload(&hash, &sources, &bytes))
                 .await?;
             return Ok(StatusCode::NO_CONTENT.into_response());
         }
@@ -970,7 +1060,7 @@ async fn handle_http(
             };
             let runtime = tokio::runtime::Handle::current();
             let output = state
-                .with_account(id, move |a| {
+                .with_owned_account(principal, move |a| {
                     if thumbnail {
                         let image =
                             runtime.block_on(images::thumbnail(&a.vault.blob_dir, &hash))?;
@@ -1139,9 +1229,9 @@ async fn upgrade(
         }
     }
     let copy = state.clone();
-    let identity = principal.vault_id.clone();
+    let owner = principal.clone();
     let (lease, slot) = tokio::task::spawn_blocking(move || {
-        let lease = copy.account(&identity)?;
+        let lease = copy.owned_account(&owner)?;
         let slot = lease
             .lock()?
             .slots

@@ -1,6 +1,7 @@
 use super::api::*;
 use super::*;
 use crate::{
+    account_metadata,
     account_reset::{self, reset},
     identity::{AuthMode, vault_identity},
     server::Config,
@@ -58,6 +59,46 @@ fn preview_and_rejected_reset_preconditions_leave_every_byte_untouched() {
     assert!(reset(&options(dir.path(), &"a".repeat(64))).is_err());
     assert_eq!(tree(dir.path()), before);
 }
+#[test]
+fn reset_records_both_incarnations_without_identifying_other_accounts() {
+    let (dir, old, other) = accounts();
+    let other_path = dir.path().join("users").join(&other);
+    let other_files = tree(&other_path);
+    let result = reset(&options(dir.path(), &old)).unwrap();
+    let new = string(&result["vaultId"]);
+    let backup = Path::new(string(&result["backupPath"]));
+    for (path, id) in [
+        (backup.to_path_buf(), old.as_str()),
+        (dir.path().join("users").join(new), new),
+    ] {
+        let metadata = account_metadata::read(&path).unwrap().unwrap();
+        assert_eq!(metadata.user, "owner");
+        assert_eq!(metadata.auth_mode, AuthMode::Proxy);
+        assert_eq!(metadata.vault_id, id);
+    }
+    assert_eq!(tree(&other_path), other_files);
+    assert_eq!(account_metadata::read(&other_path).unwrap(), None);
+}
+#[test]
+fn mismatched_or_corrupt_owner_metadata_refuses_reset_without_changing_files() {
+    let (dir, old, _) = accounts();
+    let path = dir.path().join("users").join(&old).join("account.json");
+    for bytes in [
+        json!({"user":"other","authMode":"proxy","vaultId":old}).to_string(),
+        json!({"user":"owner","authMode":"password","vaultId":old}).to_string(),
+        json!({"user":"owner","authMode":"proxy","vaultId":"a".repeat(64)}).to_string(),
+        "{broken".into(),
+    ] {
+        fs::write(&path, bytes).unwrap();
+        let before = tree(dir.path());
+        for apply in [false, true] {
+            let mut o = options(dir.path(), &old);
+            o["apply"] = json!(apply);
+            assert!(reset(&o).is_err());
+            assert_eq!(tree(dir.path()), before);
+        }
+    }
+}
 #[tokio::test]
 async fn reset_rotates_only_selected_account_preserves_backup_and_rejects_stale_http_and_ws() {
     let (dir, old, other) = accounts();
@@ -72,6 +113,18 @@ async fn reset_rotates_only_selected_account_preserves_backup_and_rejects_stale_
     let new = string(&reset["vaultId"]);
     assert_ne!(new, old);
     assert_eq!(tree(Path::new(string(&reset["backupPath"]))), old_files);
+    let backup_metadata = account_metadata::read(Path::new(string(&reset["backupPath"])))
+        .unwrap()
+        .unwrap();
+    assert_eq!(backup_metadata.user, "owner");
+    assert_eq!(backup_metadata.auth_mode, AuthMode::Proxy);
+    assert_eq!(backup_metadata.vault_id, old);
+    let new_metadata = account_metadata::read(&dir.path().join("users").join(new))
+        .unwrap()
+        .unwrap();
+    assert_eq!(new_metadata.user, "owner");
+    assert_eq!(new_metadata.auth_mode, AuthMode::Proxy);
+    assert_eq!(new_metadata.vault_id, new);
     assert!(!old_path.exists());
     assert_eq!(tree(&dir.path().join("users").join(&other)), other_files);
     assert_eq!(
