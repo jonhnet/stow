@@ -5,8 +5,7 @@ It features a draggable overview, markdown text body, checklists, images, links,
 It synchronizes between your browsers and phone and supports offline
 editing. It can be installed as an app (PWA) on Android.
 
-[Try the live demo](https://stow-demo.tech.jonh.net/) with randomized sample notes
-and kittens. See the [demo documentation](docs/DEMO.md) for build and hosting details.
+[Try the live demo](https://stow-demo.tech.jonh.net/).
 
 ## Writing and formatting
 
