@@ -95,7 +95,7 @@ test('new notes autosave before closing the editor and a new checklist row survi
   await expect(page.locator('.sync-state')).toHaveAttribute('title', 'Connected');
   await page.reload();
   await expect(card(page, 'Unclosed draft')).toContainText('This must survive a reload.');
-  await card(page, 'Unclosed draft').click();
+  await expect(page.getByRole('dialog', { name: 'Edit note', exact: true })).toBeVisible();
   await page.getByRole('dialog').getByRole('textbox', { name: 'Note text', exact: true }).focus();
   await page.getByRole('dialog').getByRole('textbox', { name: 'Note text', exact: true }).fill('An edit to undo.');
   await page.keyboard.press('Control+z');

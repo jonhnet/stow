@@ -48,7 +48,7 @@ test('overview downloads thumbnails; originals open on demand and report offline
   } finally { await Promise.all([author.close(), reader.close()]); }
 });
 
-test('offline image removal keeps the original available to local Undo without saved history', async ({ page, context }) => {
+test('offline image removal keeps the original available to Undo after reload without saved history', async ({ page, context }) => {
   await context.addCookies([{ name: 'stow_test_user', value: 'image-undo-offline@example.test', url: ORIGIN }]);
   await page.goto(ORIGIN);
   await expect(page.locator('.sync-state')).toHaveAttribute('title', 'Connected');
@@ -71,7 +71,8 @@ test('offline image removal keeps the original available to local Undo without s
   await expect(editor.locator('img')).toHaveCount(0);
   // Allow the asynchronous image-pruning pass to finish before exercising Undo.
   await page.waitForTimeout(1200);
-  await page.keyboard.press('Control+z');
+  await page.reload();
+  await editor.getByRole('toolbar', { name: 'Edit history' }).getByRole('button', { name: 'Undo', exact: true }).click();
   await expect(editor.getByRole('img', { name: 'offline.png', exact: true })).toBeVisible();
   await editor.getByRole('button', { name: 'Open original: offline.png', exact: true }).click();
   await expect(page.getByRole('dialog', { name: 'Original image: offline.png', exact: true }).getByRole('img', { name: 'offline.png', exact: true })).toBeVisible();

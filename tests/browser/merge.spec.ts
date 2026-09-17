@@ -118,7 +118,8 @@ test('existing graph-only merges open as one field and checklist, then retain ed
   await expect(text).toHaveValue('Legacy second\n\nLegacy first body\n\nLegacy second body');
   await drag(page, dialog, 'Legacy item B', 'Legacy item A', 'before');
   await expect.poll(() => itemOrder(dialog)).toEqual(['Legacy item B', 'Legacy item A']);
-  await text.focus(); await text.fill('Edited across the former note boundaries.');
+  // Re-enter through a real click after the drag's deferred Markdown blur.
+  await text.click(); await text.fill('Edited across the former note boundaries.');
   await dialog.getByRole('button', { name: 'Close', exact: true }).click();
   await page.reload();
   await card(page, 'Legacy first').click();

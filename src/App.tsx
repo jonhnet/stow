@@ -6,12 +6,13 @@ import {
   RotateCcw, Search, Settings, Trash2, Undo2, Redo2, X,
 } from 'lucide-react';
 import { store, useStow } from './core/store';
-import type { Label, Note, NoteColor, NoteKind } from './core/types';
+import type { Label, Note, NoteColor } from './core/types';
 import { checklistGroups, isChecklistGroupChecked } from './core/checklist';
 import EditorChecklist from './EditorChecklist';
 import { useEditBoundaries } from './useEditBoundaries';
 import { useDismissiblePopup } from './useDismissiblePopup';
 import { useEditorViewport } from './useEditorViewport';
+import { useEditorNavigation, type NewNote } from './useEditorNavigation';
 import Logo from './Logo';
 import Markdown from './Markdown';
 import MarkdownField from './MarkdownField';
@@ -37,8 +38,6 @@ import './styles.css';
 import './markdown.css';
 
 type View = 'notes' | 'archive' | 'trash';
-type NewNote = { kind: NoteKind; files?: File[] };
-type EditorSession = { key: string; noteId?: string; newNote?: NewNote };
 const macShortcuts = /Mac|iPhone|iPad/.test(navigator.platform);
 const undoShortcut = macShortcuts ? 'Cmd+Z' : 'Ctrl+Z';
 const redoShortcut = macShortcuts ? 'Cmd+Shift+Z' : 'Ctrl+Shift+Z or Ctrl+Y';
@@ -120,6 +119,7 @@ function NoteEditor({ note: savedNote, initial, onCreated, labels, onClose: clos
   note?: Note; initial?: NewNote; onCreated: (id: string) => void; labels: readonly Label[]; onClose: () => void;
   onError: (message: string) => void; onRestore: (id: string) => void; onUndoRedo: (kind: 'undo' | 'redo') => void; onDelete: (note: Note) => void;
 }) {
+  const { canUndo, canRedo } = useStow();
   // A blank view is local to this editor; the first mutation creates the ordinary vault note.
   const [emptyNote] = useState<Note>(() => ({ id: '', sourceIds: [], title: '', body: '', kind: initial?.kind ?? 'text',
     color: 'default', pinned: false, archived: false, trashed: false, createdAt: 0, sortOrderDate: 0, updatedAt: 0, items: [], images: [], labels: [] }));
@@ -207,6 +207,10 @@ function NoteEditor({ note: savedNote, initial, onCreated, labels, onClose: clos
   return <div ref={backdrop} className="modal-backdrop" onClick={e => { if (e.target === e.currentTarget) onClose(); }}>
     <div ref={dialog} {...boundaries.events} className="note-editor" style={{ backgroundColor: noteColor(note.color) }} role="dialog" aria-modal="true" aria-label={showingHistory ? 'Version history' : 'Edit note'} onKeyDown={keyDown} onPaste={e => { if (e.clipboardData.files.length) { e.preventDefault(); void addImages(e.clipboardData.files); } }} onDragOver={e => e.preventDefault()} onDrop={e => { e.preventDefault(); void addImages(e.dataTransfer.files); }}>
       {showingHistory ? <NoteHistory note={note} onBack={backToNote} onRestore={onRestore} onError={onError} /> : <>
+      <div className="editor-history-controls" role="toolbar" aria-label="Edit history">
+        <button className="text-button" title={`Undo (${undoShortcut})`} disabled={!canUndo} onClick={() => onUndoRedo('undo')}><Undo2 size={19} />Undo</button>
+        <button className="text-button" title={`Redo (${redoShortcut})`} disabled={!canRedo} onClick={() => onUndoRedo('redo')}><Redo2 size={19} />Redo</button>
+      </div>
       <input ref={fileRef} type="file" accept="image/*" multiple hidden onChange={e => { const files = Array.from(e.currentTarget.files || []); e.currentTarget.value = ''; void addImages(files); }} />
       <div className="editor-scroll">
         {note.trashed && <div className="trash-banner">This note is in the trash.<button onClick={() => { store.vault.setNoteMeta(note.id, { trashed: false }); }}>Restore</button></div>}
@@ -262,7 +266,7 @@ export default function App() {
   const [sidebar, setSidebar] = useState(() => window.innerWidth > 900);
   const [listView, setListView] = useState(() => { try { return localStorage.getItem('stow-list-view') === 'true'; } catch { return false; } });
   const [selected, setSelected] = useState<Set<string>>(new Set());
-  const [editing, setEditing] = useState<EditorSession | null>(null);
+  const [editing, setEditing] = useEditorNavigation();
   const [toast, setToast] = useState<{ message: string; kind: 'error' | 'history' | 'copy' } | null>(null);
   const [settings, setSettings] = useState(false);
   const [storageSettings, setStorageSettings] = useState(false);
@@ -328,7 +332,10 @@ export default function App() {
   }, [labels, selectedLabel]);
   useEffect(() => { if (toast) { const timer = setTimeout(() => setToast(null), 5000); return () => clearTimeout(timer); } }, [toast]);
   useEffect(() => { if (error) notify(error); }, [error, notify]);
-  useEffect(() => { if (access !== 'ready') { setEditing(null); setDeletion(null); setStorageSettings(false); } }, [access]);
+  useEffect(() => { if (access === 'locked' || access === 'blocked') { setEditing(null); setDeletion(null); setStorageSettings(false); } }, [access, setEditing]);
+  useEffect(() => {
+    if (access === 'ready' && ready && editing?.noteId && !activeNote && !editing.newNote) setEditing(null);
+  }, [access, ready, editing, activeNote, setEditing]);
   useEffect(() => { if (access !== 'ready') setToast(previous => previous?.kind !== 'error' ? null : previous); }, [access]);
   useEffect(() => { try { localStorage.setItem('stow-list-view', String(listView)); } catch { /* Account bootstrap reports unavailable browser storage. */ } }, [listView]);
   useEffect(() => {
@@ -399,7 +406,7 @@ export default function App() {
         </>}
       </main>
     </>
-    {editing && (activeNote || editing.newNote) && <NoteEditor key={editing.key} note={activeNote} initial={editing.newNote}
+    {access === 'ready' && editing && (activeNote || editing.newNote) && <NoteEditor key={editing.key} note={activeNote} initial={editing.newNote}
       onCreated={id => setEditing(current => current?.key === editing.key ? { ...current, noteId: id } : current)}
       labels={orderedLabels} onClose={() => setEditing(null)} onError={notify} onUndoRedo={undoOrRedo} onDelete={deleteNote}
       onRestore={id => { setSelectedLabel(null); setView('notes'); setSearch(''); openNote(id); }} />}

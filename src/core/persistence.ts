@@ -8,6 +8,7 @@ import { isEmptyUpdate, applyStoredUpdates } from './yjs-updates';
 import type { PendingEdit } from './history-types';
 import type { EditOwnership } from './edit-ownership';
 import { redactPendingEdit } from './edit-draft';
+import { restoreUndo, saveUndo } from './persistent-undo';
 
 export interface EditRecovery {
   owner: string;
@@ -23,6 +24,7 @@ interface PersistenceOptions {
   databaseName: string;
   edits?: EditRecovery;
   writer?: PersistenceWriter;
+  undo?: { manager: Y.UndoManager; ownership: EditOwnership; preferredOwner?: string; onOwner?: (owner: string) => void };
 }
 
 /** Append CRDT updates locally, reporting durability only after transaction completion. */
@@ -46,10 +48,18 @@ export class LocalPersistence {
   private retired = new Set<string>();
   private releaseOwner?: () => void;
   private stopDrafts?: () => void;
+  private undoOwner?: string;
+  private releaseUndo?: () => void;
+  private undoVersion = 0;
+  private undoCompleted = 0;
 
   constructor(private readonly doc: Y.Doc, private readonly options: PersistenceOptions) {
     this.writer = options.writer ?? browserPersistenceWriter(options.databaseName);
     this.doc.on('afterTransactionCleanup', this.prepareUpdate);
+    if (options.undo) {
+      for (const event of undoEvents) options.undo.manager.on(event, this.undoChanged);
+      this.doc.on('afterTransaction', this.undoTransaction);
+    }
     if (options.edits) {
       this.draft = options.edits.getPending();
       if (this.draft) this.draftVersion++;
@@ -73,8 +83,18 @@ export class LocalPersistence {
   }
 
   private notifyPending() {
-    try { this.options.onPending?.(this.pending.length + Number(this.draftVersion > this.draftCompleted || this.retired.size > 0)); } catch { /* UI callbacks cannot interrupt writes. */ }
+    try { this.options.onPending?.(this.pending.length + Number(this.draftVersion > this.draftCompleted || this.retired.size > 0 || this.undoVersion > this.undoCompleted)); } catch { /* UI callbacks cannot interrupt writes. */ }
   }
+
+  private undoChanged = () => {
+    this.undoVersion++;
+    this.notifyPending(); this.scheduleFlush();
+  };
+  private undoTransaction = (transaction: Y.Transaction) => {
+    // UndoManager can consume obsolete entries without changing the document or
+    // emitting stack-item-popped. Persist that removal too.
+    if (transaction.origin === this.options.undo?.manager) this.undoChanged();
+  };
 
   private report(reason: unknown): Error {
     const error = reason instanceof Error ? reason : new Error(String(reason));
@@ -122,8 +142,9 @@ export class LocalPersistence {
         () => { this.db?.close(); this.report(new Error('Local storage needs to upgrade. Reload Stow before editing further.')); },
         () => this.report(new Error('The browser closed local storage. Reload Stow to reconnect.')));
       startupMark('idb-open-end');
+      await this.openUndo();
       startupMark('idb-read-start');
-      const transaction = this.db.transaction(['updates', 'maintenance'], 'readonly');
+      const transaction = this.db.transaction(['updates', 'maintenance', 'undo'], 'readonly');
       const done = transaction.done;
       void done.catch(() => {});
       const updatesStore = transaction.objectStore('updates');
@@ -131,13 +152,20 @@ export class LocalPersistence {
       const tail = (await updatesStore.openKeyCursor(null, 'prev'))?.key;
       const validated = tail === undefined || tail === await transaction.objectStore('maintenance').get('validatedThrough');
       this.synchronized = await transaction.objectStore('maintenance').get('initialSyncComplete') === 1;
+      const undo = this.undoOwner ? await transaction.objectStore('undo').get(this.undoOwner) : undefined;
       await done;
       startupMark('idb-read-end');
       startupCount('updateCount', updates.length);
       startupCount('updateBytes', updates.reduce((bytes, update) => bytes + update.byteLength, 0));
       if (updates.length) {
         startupMark('updates-apply-start');
-        applyStoredUpdates(this.doc, updates, this);
+        const gc = this.doc.gc;
+        this.doc.gc = false;
+        try {
+          applyStoredUpdates(this.doc, updates, this);
+          if (undo) restoreUndo(this.options.undo!.manager, undo, this);
+          if (gc) Y.tryGc(Y.createDeleteSetFromStructStore(this.doc.store), this.doc.store, this.doc.gcFilter);
+        } finally { this.doc.gc = gc; }
         startupMark('updates-apply-end');
       }
       // A stale tab may have appended erased payloads after another tab's
@@ -155,11 +183,33 @@ export class LocalPersistence {
     } catch (reason) {
       this.db?.close();
       this.releaseOwner?.(); this.releaseOwner = undefined;
+      this.releaseUndo?.(); this.releaseUndo = undefined;
       throw this.report(reason instanceof Error && reason.name === 'VersionError' ? new Error('This browser has an older Stow storage format. Clear this account’s local cache before opening a freshly imported vault.') : reason);
     }
   }
 
-  private hasPendingWork() { return this.pending.length > 0 || this.compactRequested > this.compactCompleted || this.draftVersion > this.draftCompleted || this.retired.size > 0; }
+  private hasPendingWork() { return this.pending.length > 0 || this.compactRequested > this.compactCompleted || this.draftVersion > this.draftCompleted || this.retired.size > 0 || this.undoVersion > this.undoCompleted; }
+
+  private async openUndo() {
+    const undo = this.options.undo;
+    if (!undo) return;
+    const transaction = this.db!.transaction('undo');
+    const states = await transaction.store.getAll(), owners = await transaction.store.getAllKeys();
+    await transaction.done;
+    // Each active tab owns its own stack. Reopening resumes the most recently
+    // edited inactive stack; it never takes Undo away from another live tab.
+    const candidates = owners.map((owner, index) => ({ owner, time: states[index].updatedAt }))
+      .sort((a, b) => Number(b.owner === undo.preferredOwner) - Number(a.owner === undo.preferredOwner) || b.time - a.time);
+    for (const { owner } of candidates) {
+      const release = await undo.ownership.acquire(`undo:${owner}`, true);
+      if (release) { this.undoOwner = owner; this.releaseUndo = release; undo.onOwner?.(owner); return; }
+    }
+    this.undoOwner = crypto.randomUUID();
+    this.releaseUndo = await undo.ownership.acquire(`undo:${this.undoOwner}`, false) ?? undefined;
+    if (!this.releaseUndo) throw new Error('Could not acquire this page’s Undo recovery lock.');
+    undo.onOwner?.(this.undoOwner);
+    if (undo.manager.canUndo() || undo.manager.canRedo()) this.undoVersion++;
+  }
 
   private async loadStoredUpdates() {
     const updates = await this.db!.getAll('updates');
@@ -198,8 +248,12 @@ export class LocalPersistence {
       const forceCompact = compactVersion > this.compactCompleted;
       const draftVersion = this.draftVersion, draft = this.draft;
       const retired = [...this.retired];
+      const undoVersion = this.undoVersion;
       const result = await this.writer.write(this.db, {
         batch, forceCompact, vector: Y.encodeStateVector(this.doc), retired,
+        ...(this.undoOwner && undoVersion > this.undoCompleted ? { undo: {
+          owner: this.undoOwner, state: saveUndo(this.options.undo!.manager),
+        } } : {}),
         ...(this.options.edits && draftVersion > this.draftCompleted ? { edit: {
           owner: this.options.edits.owner,
           draft: draft && redactPendingEdit(draft, this.doc.getMap('deletedNotes')),
@@ -210,6 +264,7 @@ export class LocalPersistence {
       // Keep failed batches queued, and count in-flight writes until commit.
       this.pending.splice(0, batch.length);
       this.draftCompleted = draftVersion;
+      this.undoCompleted = undoVersion;
       retired.forEach(owner => this.retired.delete(owner));
       // A cleanup update arriving during this transaction requests another
       // compaction; acknowledging this one cannot consume that newer request.
@@ -268,17 +323,27 @@ export class LocalPersistence {
         this.doc.off('afterTransactionCleanup', this.prepareUpdate);
         this.doc.off('update', this.onUpdate);
         this.stopDrafts?.();
+        this.stopUndo();
         do { await this.flush(); } while (this.hasPendingWork());
       } finally {
         this.destroyed = true;
         this.doc.off('afterTransactionCleanup', this.prepareUpdate);
         this.doc.off('update', this.onUpdate);
         this.stopDrafts?.();
+        this.stopUndo();
         this.writer.close(); this.db?.close();
         this.releaseOwner?.(); this.releaseOwner = undefined;
+        this.releaseUndo?.(); this.releaseUndo = undefined;
       }
     })();
     void this.closing.catch(() => {});
     return this.closing;
   }
+
+  private stopUndo() {
+    if (this.options.undo) for (const event of undoEvents) this.options.undo.manager.off(event, this.undoChanged);
+    this.doc.off('afterTransaction', this.undoTransaction);
+  }
 }
+
+const undoEvents = ['stack-item-added', 'stack-item-popped', 'stack-item-updated', 'stack-cleared'] as const;

@@ -96,6 +96,21 @@ async function savedText(page: Page) {
   const values = [...doc.getMap<Y.Map<unknown>>('notes').values()].map(note => String(note.get('body'))); doc.destroy(); return values;
 }
 
+test('failed local writes keep cross-tab updates queued until a successful retry', async ({ page, context }) => {
+  const second = await context.newPage();
+  await second.goto(ORIGIN); await expect(second.locator('.sync-state')).toHaveClass(/sync-online/);
+  await context.setOffline(true);
+  await page.evaluate(() => { (window as any).__workerTest.mode = 'before-write'; });
+  await field(page).fill('first unpublished replacement');
+  await expect(page.locator('.error-banner')).toContainText('Local storage failed');
+  const other = second.getByRole('article', { name: 'Open note: Worker recovery', exact: true });
+  await expect(other).toContainText('initial durable');
+  await expect(other).not.toContainText('first unpublished replacement');
+  await field(page).fill('first unpublished replacement and retry');
+  await expect(other).toContainText('first unpublished replacement and retry');
+  await expect(page.locator('.error-banner')).toHaveCount(0);
+});
+
 for (const phase of ['before-write', 'during-compaction', 'after-commit']) test(`worker crash ${phase} retains pending input and retries with exact recovery`, async ({ page }) => {
   // Keep automatic sync from immediately supplying another write to retry the
   // deliberately failed local batch before we have inspected its pending state.
@@ -159,5 +174,8 @@ test('two real workers serialize threshold compaction with another tab’s unpub
   await expect(page.locator('.sync-state')).toHaveAttribute('title', 'Connected');
   await second.close(); await page.reload();
   await expect(page.getByRole('article', { name: 'Open note: Worker recovery', exact: true })).toContainText('first draft through concurrent compaction');
+  await expect(page.getByRole('article', { name: 'Open note: Other worker', exact: true })).toContainText('second draft through concurrent compaction');
+  await page.getByRole('dialog', { name: 'Edit note', exact: true }).getByRole('toolbar', { name: 'Edit history' }).getByRole('button', { name: 'Undo', exact: true }).click();
+  await expect(page.getByRole('article', { name: 'Open note: Worker recovery', exact: true })).toContainText('initial durable');
   await expect(page.getByRole('article', { name: 'Open note: Other worker', exact: true })).toContainText('second draft through concurrent compaction');
 });

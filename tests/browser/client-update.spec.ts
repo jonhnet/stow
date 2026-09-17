@@ -20,7 +20,9 @@ test.beforeEach(async ({ context }, info) => {
 
 test('update waits for local writes, composition and idle; offline edits survive and reloads cannot loop', async ({ page, context }) => {
   await workerGate(page); const version = await olderClient(page);
-  let loads = 0; page.on('framenavigated', frame => { if (frame === page.mainFrame()) loads++; });
+  // Opening/closing notes now navigates within the document. Count only actual
+  // page loads when checking the automatic-reload limit.
+  let loads = 0; page.on('load', () => { loads++; });
   await page.goto(origin); await connected(page); await createNote(page);
   await page.clock.install();
   await context.setOffline(true);

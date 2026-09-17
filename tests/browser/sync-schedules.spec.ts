@@ -101,7 +101,9 @@ test('two shared tabs compact while a remote device edits and a local write is h
     });
     await edit(page, text => text + ' HELD-FIRST-TAB');
     await expect.poll(() => page.evaluate(() => (window as any).syncWorkerGate.held)).toBeGreaterThan(0);
-    await expect(card(tab)).toContainText('HELD-FIRST-TAB');
+    // Publication now follows the atomic edit + Undo commit. A different tab
+    // must not compact this deletion before its author's Undo ranges are saved.
+    await expect(card(tab)).not.toContainText('HELD-FIRST-TAB');
     await edit(tab, text => text + ' SECOND-TAB');
     await expect.poll(() => tab.evaluate(async () => {
       const name = (await indexedDB.databases()).find(entry => entry.name?.startsWith('stow-notes-'))!.name!;
@@ -113,8 +115,10 @@ test('two shared tabs compact while a remote device edits and a local write is h
         }; request.onerror = () => reject(request.error);
       });
     })).toBeLessThan(499);
+    await expect(card(tab)).not.toContainText('HELD-FIRST-TAB');
     await edit(phone, text => 'REMOTE-PHONE ' + text);
     await page.evaluate(() => (window as any).syncWorkerGate.release());
+    await expect(card(tab)).toContainText('HELD-FIRST-TAB');
     await expect(page.locator('.sync-state')).toHaveAttribute('title', 'Offline — notes stored on this device');
     await context.setOffline(false);
     for (const client of [page, tab, phone]) for (const marker of ['HELD-FIRST-TAB', 'SECOND-TAB', 'REMOTE-PHONE']) await expect(card(client)).toContainText(marker);

@@ -87,6 +87,6 @@ Viewed originals use a 50 MiB cache; thumbnails download automatically. Pending 
 
 ## Behavior and maintenance references
 
-The [architecture](architecture.md) documents stable note/item identities, ordering, merges, undo, permanent deletion, and image ownership. Session Undo ends on reload; saved server history survives and restores copies. Intermediate offline edits may merge into one server-observed version.
+The [architecture](architecture.md) documents stable note/item identities, ordering, merges, undo, permanent deletion, and image ownership. Undo/Redo survives reload and PWA restart in the same browser; saved server history restores copies across devices. Intermediate offline edits may merge into one server-observed version.
 
 See [label identity](label-model.md), [archive history cleanup](archive-history-cleanup.md), and [storage protocol](storage-protocol.md) for their current contracts. Administration and measurement procedures live in [Keep import](import-keep.md), [indentation recovery](restore-keep-indentation.md), [account reset](account-reset.md), [startup diagnostics](startup-diagnostics.md), and [performance tools](performance.md).

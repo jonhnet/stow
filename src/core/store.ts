@@ -78,6 +78,8 @@ class StowStore {
   private connecting = false;
   private outgoingUpdates: Uint8Array[] = [];
   private broadcastUpdates: Uint8Array[] = [];
+  private durableBroadcasts: unknown[] = [];
+  private broadcasting = false;
   private replicationScheduled = false;
   private parked = false;
 
@@ -114,7 +116,7 @@ class StowStore {
       this.parked = true;
       this.updateReload?.stop();
       this.access = 'opening'; this.ready = false;
-      this.closeSocket(); this.channel?.close(); this.channel = undefined;
+      this.closeSocket(); this.channel?.close(); this.channel = undefined; this.durableBroadcasts = [];
       clearTimeout(this.retry); clearTimeout(this.imageTimer);
       const closing = this.persistence?.destroy();
       void closing?.then(() => {
@@ -193,9 +195,35 @@ class StowStore {
     const boundaries = this.historyBoundaries.splice(0);
     if (this.access !== 'ready') return;
     // Deliver current data before any hint asking the server to save a version.
-    if (broadcast.length) this.channel?.postMessage(Y.mergeUpdates(broadcast));
+    if (broadcast.length) this.broadcastAfterSave(Y.mergeUpdates(broadcast));
     if (outgoing.length) this.sendUpdate(Y.mergeUpdates(outgoing));
     for (const boundary of boundaries) this.sendHistoryHint('history-boundary', boundary);
+  }
+
+  private broadcastAfterSave(message: unknown) {
+    this.durableBroadcasts.push(message);
+    this.flushBroadcasts();
+  }
+
+  private flushBroadcasts() {
+    if (this.broadcasting || !this.durableBroadcasts.length || !this.channel) return;
+    this.broadcasting = true;
+    const channel = this.channel;
+    const batch = this.durableBroadcasts.slice();
+    let failed = false;
+    // A second tab may compact the shared log as soon as it receives an edit.
+    // Its worker must already be able to see the originating tab's Undo ranges.
+    void this.persistence?.whenDurable().then(() => {
+      if (this.access === 'ready' && this.channel === channel) {
+        for (const message of batch) channel.postMessage(message);
+        this.durableBroadcasts.splice(0, batch.length);
+      }
+    }).catch(() => { failed = true; }).finally(() => {
+      this.broadcasting = false;
+      if (!failed && this.access === 'ready' && this.channel === channel) this.flushBroadcasts();
+    });
+    // Failed writes keep these messages queued as well as the local updates.
+    // Publishing only the next edit would leave peers missing its dependencies.
   }
 
   private closeSocket() {
@@ -215,7 +243,7 @@ class StowStore {
     clearTimeout(this.retry); clearTimeout(this.imageTimer);
     this.closeSocket();
     this.accountAbort.abort();
-    this.channel?.close(); this.channel = undefined;
+    this.channel?.close(); this.channel = undefined; this.durableBroadcasts = [];
     this.historyPreviews.clear();
     this.images?.close();
     this.outgoingUpdates = []; this.broadcastUpdates = []; this.historyPreviews.clear();
@@ -264,6 +292,11 @@ class StowStore {
     this.authMode = account.authMode;
     this.persistence = new LocalPersistence(this.vault.doc, {
       databaseName,
+      undo: {
+        manager: this.vault.undoManager, ownership,
+        preferredOwner: history.state?.stowUndo?.databaseName === databaseName ? history.state.stowUndo.owner : undefined,
+        onOwner: owner => history.replaceState({ ...history.state, stowUndo: { databaseName, owner } }, ''),
+      },
       edits: {
         owner: crypto.randomUUID(), ownership,
         getPending: () => this.vault.getPendingEdit(),
@@ -271,7 +304,7 @@ class StowStore {
         recover: draft => this.vault.recoverPendingEdit(draft),
       },
       onError: () => { this.localError = 'Local storage failed. Keep this tab open and export your notes. Offline changes may not survive closing it.'; this.refresh(); },
-      onPending: count => { this.localPending = count; if (count === 0) this.localError = null; this.refresh(); },
+      onPending: count => { this.localPending = count; if (count === 0) { this.localError = null; this.flushBroadcasts(); } this.refresh(); },
     });
     this.images = new ImageStore({
       vaultId: account.vaultId,
@@ -299,7 +332,7 @@ class StowStore {
     this.vault.doc.on('update', this.onUpdate);
     this.updateDeletedImages();
     this.channel = new BroadcastChannel(`stow-vault-${account.vaultId}`);
-    const tabs = new TabSync(this.vault.doc, message => this.channel?.postMessage(message));
+    const tabs = new TabSync(this.vault.doc, message => this.broadcastAfterSave(message));
     this.channel.addEventListener('message', event => {
       if (this.access !== 'ready') return;
       try {
@@ -332,10 +365,15 @@ class StowStore {
     if (this.access !== 'ready' || this.socket?.readyState !== WebSocket.OPEN || !this.transfer) return Promise.resolve();
     const socket = this.socket, id = crypto.randomUUID();
     this.requests.add(id);
-    const sent = this.transfer.send('update', update).then(() => {
+    const transfer = this.transfer;
+    const sent = this.persistence!.whenDurable().then(() => {
+      if (this.socket !== socket || this.access !== 'ready') return;
+      // The server can echo this update to another tab sharing this database.
+      return transfer.send('update', update);
+    }).then(() => {
       if (this.socket === socket) { this.requests.delete(id); this.refresh(); }
     });
-    void sent.catch(() => {}); this.lastUpload = sent; this.refresh(); return sent;
+    void sent.catch(() => { if (this.socket === socket) socket.close(); }); this.lastUpload = sent; this.refresh(); return sent;
   }
 
   private sendHistoryHint(kind: 'history-boundary' | 'sync-complete', value: unknown, socket = this.socket, after = this.lastUpload) {

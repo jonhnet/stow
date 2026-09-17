@@ -4,6 +4,7 @@ import type { PersistenceConnection } from './persistence-database';
 import { applyStoredUpdates } from './yjs-updates';
 import { enforcePermanentDeletions } from './deletion';
 import { redactPendingEdit } from './edit-draft';
+import { redactUndo, retainUndo, type SavedUndo } from './persistent-undo';
 
 export interface PersistenceWrite {
   batch: Uint8Array[];
@@ -11,6 +12,7 @@ export interface PersistenceWrite {
   vector: Uint8Array;
   edit?: { owner: string; draft: PendingEdit | null };
   retired: string[];
+  undo?: { owner: string; state: SavedUndo };
 }
 export interface CompactionMetrics { totalMs: number; applyMs: number; encodeMs: number; inputBytes: number; outputBytes: number }
 export interface PersistenceWriteResult { correction?: Uint8Array; compaction?: CompactionMetrics }
@@ -23,12 +25,13 @@ export interface PersistenceWriter {
  * occurs wholly before or after it; completion always means the commit finished. */
 export async function writePersistenceBatch(db: PersistenceConnection, request: PersistenceWrite, onCompacting: () => void = () => {}): Promise<PersistenceWriteResult> {
   const { batch, retired, edit } = request;
-  const transaction = db.transaction(['updates', 'pendingEdits', 'maintenance'], 'readwrite');
+  const transaction = db.transaction(['updates', 'pendingEdits', 'maintenance', 'undo'], 'readwrite');
   const updatesStore = transaction.objectStore('updates'), editsStore = transaction.objectStore('pendingEdits'), maintenance = transaction.objectStore('maintenance');
   const done = transaction.done; void done.catch(() => {});
   const result: PersistenceWriteResult = {};
   try {
     await Promise.all(batch.map(update => updatesStore.add(update)));
+    if (request.undo) await transaction.objectStore('undo').put(request.undo.state, request.undo.owner);
     if (edit) {
       // Pending recovery contains source timestamps only. A stale writer cannot
       // retain historical text; recovery rereads durable current-state deletions.
@@ -38,11 +41,19 @@ export async function writePersistenceBatch(db: PersistenceConnection, request: 
     for (const owner of retired) await editsStore.delete(owner);
     if (request.forceCompact || retired.length || await updatesStore.count() >= 500) {
       onCompacting();
-      const start = performance.now(), updates = await updatesStore.getAll(), compacting = new Y.Doc();
+      const start = performance.now(), updates = await updatesStore.getAll(), compacting = new Y.Doc({ gc: false });
       try {
         const applyStart = performance.now();
         applyStoredUpdates(compacting, updates); enforcePermanentDeletions(compacting);
         const applyMs = performance.now() - applyStart, deleted = compacting.getMap('deletedNotes');
+        const undoStore = transaction.objectStore('undo');
+        const histories = await undoStore.getAll(), historyOwners = await undoStore.getAllKeys();
+        for (let index = 0; index < histories.length; index++) {
+          const kept = redactUndo(histories[index], deleted);
+          retainUndo(compacting, kept);
+          await undoStore.put(kept, historyOwners[index]);
+        }
+        Y.tryGc(Y.createDeleteSetFromStructStore(compacting.store), compacting.store, compacting.gcFilter);
         const drafts = await editsStore.getAll(), owners = await editsStore.getAllKeys();
         await Promise.all(drafts.map((saved, index) => {
           const kept = redactPendingEdit(saved, deleted);

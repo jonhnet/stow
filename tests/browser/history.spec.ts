@@ -55,7 +55,7 @@ test('offline edits stay usable; reconnect saves the observed state and history 
       request.onsuccess = () => { const db = request.result; const stores = [...db.objectStoreNames]; db.close(); resolve(stores); };
     });
   });
-  expect(roots.sort()).toEqual(['maintenance', 'pendingEdits', 'updates']);
+  expect(roots.sort()).toEqual(['maintenance', 'pendingEdits', 'undo', 'updates']);
   await page.screenshot({ path: test.info().outputPath('stow-note-history.png'), fullPage: true });
   await page.keyboard.press('Escape');
   await expect(page.getByRole('dialog', { name: 'Edit note', exact: true })).toBeVisible();

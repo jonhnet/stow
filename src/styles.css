@@ -146,6 +146,9 @@
 .settings-build time{font-size:11px}
 .server-notice{max-width:min(600px,calc(100vw - 48px));align-items:center;z-index:110}
 .server-notice p{margin:0;overflow-wrap:anywhere}
+.editor-history-controls{display:flex;gap:4px;padding:4px 12px;flex-shrink:0;border-bottom:1px solid var(--border)}
+.editor-history-controls .text-button{display:inline-flex;align-items:center;gap:7px;min-height:44px;padding:8px 12px}
+.editor-history-controls .text-button:disabled{opacity:.35;cursor:default}
 .server-notice .server-notice-status{margin-top:8px;font-size:13px;opacity:.85}
 .server-notice>button{flex-shrink:0;color:inherit;border:1px solid currentColor;border-radius:6px;padding:8px 12px;background:transparent;cursor:pointer}
 .server-notice>button:disabled{opacity:.5;cursor:default}

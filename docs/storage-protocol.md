@@ -2,17 +2,22 @@
 
 ## Browser persistence
 
-The fresh account-scoped IndexedDB schema is version 1, with exactly three stores:
+The account-scoped IndexedDB schema is version 2, with four stores:
 
 | Store | Contents |
 | --- | --- |
 | `updates` | Binary current-state Yjs updates; compacted at 500 entries or after permanent deletion/recovery |
 | `pendingEdits` | Per-page `{ modifiedAt: { sourceId: timestamp } }`, without historical text or anchors |
 | `maintenance` | The validated log-tail key following sanitization, and an initial-sync-complete marker |
+| `undo` | Per-tab Undo/Redo stacks, descriptions, and Yjs redo links; committed with the corresponding updates |
 
 A fresh browser cache keeps the notes view loading until the first server snapshot is durable. The account-local completion marker also distinguishes a synchronized empty vault from an unfinished download, so empty accounts remain usable offline. Existing cached notes appear immediately while reconnecting. The marker is written once, after current data commits; it neither changes the CRDT nor appends empty updates on reload.
 
-The worker owns the append/sanitize/encode/replace transaction. Another tab's write occurs wholly before or after it. The main thread retains pending buffers until commit and receives only the correction relative to its state vector. Web Locks prevent recovery of an active owner's timestamps. Orphan recovery commits modification timestamps and owner retirement together. Old database layouts and replicated-history roots are rejected without rewriting their stored bytes; there is no migration.
+The worker owns the append/sanitize/encode/replace transaction. Another tab's write occurs wholly before or after it. The main thread retains pending buffers until commit and receives only the correction relative to its state vector. Web Locks prevent recovery of an active owner's timestamps or Undo stack. Orphan recovery commits modification timestamps and owner retirement together. Version 1 current-only caches gain an empty `undo` store without changing their existing data; earlier database layouts and replicated-history roots are rejected without rewriting their stored bytes.
+
+Undo survives reload and PWA restart on the same browser profile. Reload prefers that page's previous stack; a fresh launch resumes the most recently edited inactive stack. Active tabs have separate stacks. Loading and compaction retain deleted CRDT content needed by saved stacks, including parent records; permanent deletion prunes affected stack entries and their retained content. Undo metadata stays local to this account and browser, outside backups and sync. Clearing browser storage clears it. `persistent-undo.ts` depends on Yjs 13's stack/delete-set and redo-link representation; its reload/compaction tests must pass when upgrading Yjs.
+
+Outgoing updates and tab responses wait for local durability. Otherwise a receiving tab could compact a newly deleted range before its author's Undo metadata becomes visible in the shared database. Storage failure retains pending edits and prevents publishing that incomplete local transaction.
 
 Worker death before a write, during compaction, or after commit leaves unacknowledged input retryable. Page departure waits for durability before releasing the worker and vault; a failed departure retains the in-memory current data and offers an emergency backup. Returning through browser navigation history reloads durable data. Storage protection is requested only through the explicit Settings button. Incremental label invalidation, memoized checklist rows, textarea measurement, cooperative search construction, and account-scoped tab broadcasts remain in place.
 
@@ -53,7 +58,7 @@ after five seconds of inactivity in a visible page, with no active input
 composition, pending local note/image writes, or local storage failure. It
 finishes the edit, awaits IndexedDB durability, then rechecks activity and safety
 before navigation. This preserves offline content without waiting for a server
-acknowledgment. It does not retain the in-memory Undo stack. One automatic attempt
+acknowledgment. The local Undo/Redo stack is committed with the edits. One automatic attempt
 per account and required target is recorded in sessionStorage; a still-rejected
 bundle keeps the notice and a manual Reload button instead of looping. Storage
 failure prevents automatic navigation. `action: "none"` surfaces the rejection

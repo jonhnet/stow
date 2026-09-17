@@ -44,6 +44,13 @@ async function openHistory(page: Page, title: string) {
   return page.getByRole('dialog', { name: 'Version history', exact: true });
 }
 
+async function savedHistory(page: Page): Promise<HistoryExport> {
+  const session = await (await page.request.get(`${ORIGIN}/api/session`)).json();
+  const response = await page.request.get(`${ORIGIN}/api/history/export`, { headers: { 'X-Stow-Vault': session.vaultId } });
+  expect(response.ok()).toBe(true);
+  return response.json();
+}
+
 test.beforeEach(async ({ page, context }, testInfo) => {
   await context.addCookies([{ name: 'stow_test_user', value: `undo-redo-${testInfo.testId}-${testInfo.retry}@example.test`, url: ORIGIN }]);
   await page.goto(ORIGIN);
@@ -158,19 +165,24 @@ test('history exposes title, body and item edits and global label colors as nonr
   await createNote(page, 'Orchard title', 'Cobalt paragraph', 'Research');
   await createNote(page, 'Other labeled note', 'This body stays unchanged.', 'Research');
   await createNote(page, 'Unrelated settings note', 'No label color entry belongs here.');
+  const savedText = async (title: string, body: string) => (await savedHistory(page)).versions.some(version =>
+    Object.values(version.state.sources).some(source => source.title === title && source.body === body));
+  await expect.poll(() => savedText('Orchard title', 'Cobalt paragraph')).toBe(true);
   await card(page, 'Orchard title').getByRole('heading', { name: 'Orchard title', exact: true }).click();
   await editor(page).getByRole('textbox', { name: 'Note title', exact: true }).fill('Harbor title');
   const body = editor(page).getByRole('textbox', { name: 'Note text', exact: true });
-  await body.focus(); await body.fill('Copper paragraph');
+  await body.focus();
+  // Server versions are observed states. Let it capture each field's boundary
+  // before changing the next field, so this test can require separate labels.
+  await expect.poll(() => savedText('Harbor title', 'Cobalt paragraph')).toBe(true);
+  await body.fill('Copper paragraph'); await body.blur();
+  await expect.poll(() => savedText('Harbor title', 'Copper paragraph')).toBe(true);
   await editor(page).getByRole('button', { name: 'Add checklist', exact: true }).click();
   await editor(page).getByRole('textbox', { name: 'New list item', exact: true }).fill('Mango task');
   // Establish the saved starting version before testing its change description.
   // Best-effort history hints can otherwise observe the next edit already applied.
   await expect.poll(async () => {
-    const session = await (await page.request.get(`${ORIGIN}/api/session`)).json();
-    const response = await page.request.get(`${ORIGIN}/api/history/export`, { headers: { 'X-Stow-Vault': session.vaultId } });
-    expect(response.ok()).toBe(true);
-    const history: HistoryExport = await response.json();
+    const history = await savedHistory(page);
     return history.versions.some(version => Object.values(version.state.sources)
       .some(source => Object.values(source.items).some(item => item.text === 'Mango task')));
   }).toBe(true);
@@ -188,10 +200,7 @@ test('history exposes title, body and item edits and global label colors as nonr
   // Saved history is best effort. Wait for this server boundary before tearing
   // down the page whose hint is queued after the durable current upload.
   await expect.poll(async () => {
-    const session = await (await page.request.get(`${ORIGIN}/api/session`)).json();
-    const response = await page.request.get(`${ORIGIN}/api/history/export`, { headers: { 'X-Stow-Vault': session.vaultId } });
-    expect(response.ok()).toBe(true);
-    return (await response.json()).versions.some((version: { kind?: string; labelChange?: { name: string } }) => version.kind === 'label' && version.labelChange?.name === 'Research');
+    return (await savedHistory(page)).versions.some(version => version.kind === 'label' && version.labelChange?.name === 'Research');
   }).toBe(true);
   await page.reload();
 
