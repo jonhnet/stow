@@ -9,9 +9,8 @@ editing. It can be installed as an app (PWA) on Android.
 
 ## Writing and formatting
 
-Note bodies support headings, paragraphs, bulleted and numbered lists, quotations, horizontal rules, fenced/indented code, and tables. Both note bodies and checklist items support `*italic*`, `**bold**`, `~~strikethrough~~`, inline code, and `[named links](https://example.com)`. Web URLs, `www` addresses, and email addresses are recognized automatically. Checklist items use inline syntax only: a leading `#` or `-` remains ordinary item text. Single line breaks remain visible.
-
-Links remain ordinary clickable links. Webpage preview cards and fetching their titles, descriptions, or thumbnails are outside Stow's intended scope.
+Note bodies support markdown-style headings, paragraphs, bulleted and numbered lists, quotations, horizontal rules, fenced/indented code, and tables.
+Both note bodies and checklist items support inline markdown: `*italic*`, `**bold**`, `~~strikethrough~~`, inline code, and `[named links](https://example.com)`.
 
 ## Run a dev server locally
 
