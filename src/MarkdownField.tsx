@@ -26,7 +26,7 @@ export default function MarkdownField({ value, inline = false, className = '', o
       if (completion !== null) window.clearTimeout(completion);
       completion = null;
       pointer.current = null;
-      if (pendingBlur.current && !composing.current) {
+      if (pendingBlur.current && !composing.current && document.hasFocus()) {
         pendingBlur.current = false;
         if (document.activeElement !== input.current) setEditing(false);
       }
@@ -78,8 +78,10 @@ export default function MarkdownField({ value, inline = false, className = '', o
       onFocus?.(event);
     }} onBlur={event => {
       selection.current = { start: event.currentTarget.selectionStart, end: event.currentTarget.selectionEnd, direction: event.currentTarget.selectionDirection };
-      // Keep geometry fixed between pointerdown and click so a toolbar button cannot move away.
-      if (pointer.current !== null || composing.current) pendingBlur.current = true;
+      // A tab/window switch blurs the field too. Keep its native editor and
+      // selection mounted so the browser can restore focus when we return.
+      // Also keep geometry fixed through a click so its target cannot move away.
+      if (!document.hasFocus() || pointer.current !== null || composing.current) pendingBlur.current = true;
       else setEditing(false);
       onBlur?.(event);
     }} onCompositionStart={event => {
@@ -89,7 +91,7 @@ export default function MarkdownField({ value, inline = false, className = '', o
       onCompositionEnd?.(event);
       queueMicrotask(() => {
         composing.current = false;
-        if (pendingBlur.current && pointer.current === null && document.activeElement !== input.current) {
+        if (pendingBlur.current && pointer.current === null && document.hasFocus() && document.activeElement !== input.current) {
           pendingBlur.current = false;
           setEditing(false);
         }

@@ -15,6 +15,9 @@
 @media(hover:none),(pointer:coarse){.item-drag-handle{opacity:.55;width:28px;height:36px}.editor-check-row{min-height:36px}.editor-checklist>.new-item{padding-left:36px}.editor-check-row.insert-before::before,.editor-check-row.insert-after::after{left:36px}}
 @media(prefers-reduced-motion:reduce){*,*::before,*::after{animation:none!important;transition:none!important;scroll-behavior:auto!important}}
 
+/* A wider white stroke behind the dark pin stays legible over photographs. */
+.card-pin svg{position:absolute;pointer-events:none}
+
 /* Keep the dev vault visibly distinct, including loading screens and dialogs. */
 .development body{background-image:url('./dev-watermark.svg');background-size:460px 260px;background-attachment:fixed}
 .development-notice{position:fixed;bottom:0;left:0;right:0;z-index:200;min-height:26px;display:flex;align-items:center;justify-content:center;padding:5px 10px calc(5px + env(safe-area-inset-bottom,0px));background:#fef3c7;color:#92400e;border-top:1px solid #f59e0b;font-size:11px;font-weight:700;letter-spacing:1.1px;line-height:16px;text-align:center;pointer-events:none;user-select:none}

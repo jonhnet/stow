@@ -175,17 +175,35 @@ test('paste and cut save their observed endpoints while preserving every fine Un
   await expect(page.locator('.card-body')).toHaveText('Original body');
 });
 
-test('window blur seals focused typing once without ending the editor', async ({ page }) => {
+test('switching tabs seals typing while retaining the native editor, selection, and Undo', async ({ page, context }) => {
   const baseline = await historyCount(page), field = body(page);
   await append(field, ' before switching apps');
-  await page.evaluate(() => { window.dispatchEvent(new Event('blur')); window.dispatchEvent(new Event('blur')); });
+  const source = (await field.elementHandle())!;
+  const selection = { start: 9, end: 13, direction: 'backward' } as const;
+  await field.evaluate((input: HTMLTextAreaElement, selection) => input.setSelectionRange(selection.start, selection.end, selection.direction), selection);
+  // Playwright normally pretends every page stays focused. Disable that so a
+  // real tab switch sends the textarea's focusout as well as window blur.
+  const cdp = await context.newCDPSession(page);
+  await cdp.send('Emulation.setFocusEmulationEnabled', { enabled: false });
+  const other = await context.newPage();
+  await other.goto('about:blank'); await other.bringToFront();
+  await expect.poll(() => page.evaluate(() => document.hasFocus())).toBe(false);
   await expectHistory(page, baseline + 1);
+  expect(await source.evaluate(input => input.isConnected)).toBe(true);
+  await page.bringToFront();
   await expect(field).toBeFocused();
-  await field.pressSequentially(' and back');
+  expect(await field.evaluate((input: HTMLTextAreaElement) => ({ start: input.selectionStart, end: input.selectionEnd, direction: input.selectionDirection }))).toEqual(selection);
+  await page.keyboard.insertText('text');
+  await expect(field).toHaveValue('Original text before switching apps');
   await field.press('Control+z');
   await expect(field).toHaveValue('Original body before switching apps');
   await field.press('Control+z');
   await expect(field).toHaveValue('Original body');
+  // Returning to the app must not make editing sticky after an intentional
+  // focus change to another note field.
+  await title(page).focus();
+  await expect(field).toHaveAttribute('aria-readonly', 'true');
+  await other.close(); await cdp.detach();
 });
 
 test('IME stays one Undo action across a pending blur boundary', async ({ page, context }) => {

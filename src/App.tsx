@@ -108,7 +108,7 @@ const NoteCard = memo(function NoteCard({ note, labels, onOpen, selected, select
       <NoteLabels labels={note.labels} catalog={labels} />
       {!note.title && !body && !note.items.length && !note.images.length && <p className="empty-note">Empty note</p>}
     </div>
-    <IconButton label={note.pinned ? 'Unpin note' : 'Pin note'} className={`card-pin ${note.pinned ? 'pinned' : ''}`} onClick={e => { e.stopPropagation(); mutate({ pinned: !note.pinned }); }}><Pin size={19} fill={note.pinned ? 'currentColor' : 'none'} /></IconButton>
+    <IconButton label={note.pinned ? 'Unpin note' : 'Pin note'} className={`card-pin ${note.pinned ? 'pinned' : ''}`} onClick={e => { e.stopPropagation(); mutate({ pinned: !note.pinned }); }}><Pin className="pin-outline" size={19} stroke="white" strokeWidth={5} aria-hidden="true" /><Pin size={19} fill={note.pinned ? 'currentColor' : 'none'} aria-hidden="true" /></IconButton>
     <div className="card-actions" onClick={e => e.stopPropagation()}>
       {note.trashed ? <><IconButton label="Restore note" onClick={() => mutate({ trashed: false })}><RotateCcw size={17} /></IconButton><IconButton label="Delete forever" onClick={() => onDelete(note)}><Trash2 size={17} /></IconButton></> : <>
         <div className="palette-anchor" ref={paletteRef}><IconButton label="Background color" aria-expanded={palette} onClick={() => setPalette(!palette)}><Palette size={17} /></IconButton>{palette && <ColorPicker anchor={paletteRef} value={note.color} onChange={color => mutate({ color })} onClose={() => setPalette(false)} />}</div>
@@ -223,11 +223,15 @@ function NoteEditor({ note: savedNote, initial, onCreated, labels, onClose: clos
     if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') { e.preventDefault(); onClose(); return; }
     navigateNoteFields(e);
     if (e.key === 'Escape') { e.preventDefault(); if (palette) setPalette(false); else if (menu) setMenu(false); else if (history) backToNote(); else onClose(); }
-    if (e.key === 'Tab') {
-      const focusable = Array.from(dialog.current?.querySelectorAll<HTMLElement>('button:not(:disabled), input:not(:disabled):not([hidden]), textarea:not(:disabled), a[href], [tabindex="0"]') || []).filter(el => el.offsetParent !== null);
+    if (e.key === 'Tab' && !e.defaultPrevented) {
+      const focusable = Array.from(dialog.current?.querySelectorAll<HTMLElement>('button:not(:disabled), input:not(:disabled):not([hidden]), textarea:not(:disabled), a[href], [tabindex="0"]') || []).filter(el => el.tabIndex >= 0 && el.offsetParent !== null);
       const first = focusable[0], last = focusable[focusable.length - 1];
-      if (!dialog.current?.contains(document.activeElement)) { e.preventDefault(); (e.shiftKey ? last : first)?.focus(); }
-      else if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last?.focus(); } else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first?.focus(); }
+      // Keep the pin beside the title visually, but visit it after the toolbar.
+      const pin = dialog.current?.querySelector<HTMLButtonElement>('[data-editor-pin]');
+      if (!dialog.current?.contains(document.activeElement)) { e.preventDefault(); (e.shiftKey ? pin ?? last : first)?.focus(); }
+      else if (document.activeElement === pin) { e.preventDefault(); (e.shiftKey ? last : first)?.focus(); }
+      else if (e.shiftKey && document.activeElement === first) { e.preventDefault(); (pin ?? last)?.focus(); }
+      else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); (pin ?? first)?.focus(); }
     }
   };
   return <div ref={backdrop} className="modal-backdrop" onClick={e => { if (e.target === e.currentTarget) onClose(); }}>
@@ -238,7 +242,7 @@ function NoteEditor({ note: savedNote, initial, onCreated, labels, onClose: clos
         {note.trashed && <div className="trash-banner">This note is in the trash.<button onClick={() => { store.vault.setNoteMeta(note.id, { trashed: false }); }}>Restore</button></div>}
         <section className="editor-section">
           {note.images.length > 0 && <div className="editor-images">{note.images.map(img => <NoteImage key={img.id} attachment={img} onRemove={note.trashed ? undefined : () => store.vault.removeAttachment(img.id)} />)}</div>}
-          <div className="editor-title-row"><AutoTextarea data-note-field className="title-input" placeholder="Title" aria-label="Note title" value={note.title} disabled={note.trashed} onChange={e => { const value = e.currentTarget.value; store.vault.setNoteText(ensureNote(), 'title', value); }} />{!note.trashed && <IconButton label={note.pinned ? 'Unpin note' : 'Pin note'} onClick={() => store.vault.setNoteMeta(ensureNote(), { pinned: !note.pinned })}><Pin size={22} fill={note.pinned ? 'currentColor' : 'none'} /></IconButton>}</div>
+          <div className="editor-title-row"><AutoTextarea data-note-field className="title-input" placeholder="Title" aria-label="Note title" value={note.title} disabled={note.trashed} onChange={e => { const value = e.currentTarget.value; store.vault.setNoteText(ensureNote(), 'title', value); }} />{!note.trashed && <IconButton data-editor-pin tabIndex={-1} label={note.pinned ? 'Unpin note' : 'Pin note'} onClick={() => store.vault.setNoteMeta(ensureNote(), { pinned: !note.pinned })}><Pin size={22} fill={note.pinned ? 'currentColor' : 'none'} /></IconButton>}</div>
           <MarkdownField data-note-field className="editor-body" placeholder="Take a note…" aria-label="Note text" value={note.body} disabled={note.trashed} onChange={e => { const value = e.currentTarget.value; store.vault.setNoteText(ensureNote(), 'body', value); }} />
           {(note.kind === 'checklist' || note.items.length > 0) && <EditorChecklist note={note} disabled={note.trashed} onAddItem={addItem} />}
           <NoteLabels labels={note.labels} catalog={labels} onRemove={note.trashed ? undefined : name => store.vault.setNoteLabel(note.id, name, false)} />
