@@ -335,7 +335,7 @@ test.describe('touch note gestures', () => {
     await close();
   });
 
-  test('an image-only card can be selected by holding its preview while a quick tap still opens the image', async ({ page, context }) => {
+  test('an image-only card can be selected by holding its preview and opened before zooming with two taps', async ({ page, context }) => {
     await seed(page, context, 3);
     const { touch, close } = await touchscreen(page, context);
     await page.getByRole('button', { name: 'Take a note…', exact: true }).tap();
@@ -348,8 +348,8 @@ test.describe('touch note gestures', () => {
     await expect(page.getByRole('dialog', { name: 'Edit note', exact: true }).locator('img')).toHaveCount(1);
     await page.getByRole('button', { name: 'Close', exact: true }).tap();
     const imageCard = card(page, 'Untitled note');
-    const preview = imageCard.getByRole('button', { name: 'Open original: touch-drawing.png', exact: true });
-    await expect(preview.getByRole('img')).toBeVisible();
+    const preview = imageCard.getByRole('img', { name: 'touch-drawing.png', exact: true });
+    await expect(preview).toBeVisible();
     await expectCircles(page, false);
     const bounds = (await preview.boundingBox())!;
     await touch('touchStart', bounds.x + bounds.width / 2, bounds.y + bounds.height / 2);
@@ -362,6 +362,10 @@ test.describe('touch note gestures', () => {
     await page.getByRole('button', { name: 'Clear selection', exact: true }).tap();
     await expectCircles(page, false);
     await preview.tap();
+    const editor = page.getByRole('dialog', { name: 'Edit note', exact: true });
+    await expect(editor).toBeVisible();
+    await expect(page.getByRole('dialog', { name: 'Original image: touch-drawing.png', exact: true })).toHaveCount(0);
+    await editor.getByRole('img', { name: 'touch-drawing.png', exact: true }).tap();
     await expect(page.getByRole('dialog', { name: 'Original image: touch-drawing.png', exact: true }).getByRole('img', { name: 'touch-drawing.png', exact: true })).toBeVisible();
     await close();
   });

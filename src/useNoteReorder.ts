@@ -103,8 +103,8 @@ export function useNoteReorder(container: RefObject<HTMLDivElement | null>, tile
       if (gesture) { finish(); return; }
       if (!event.isPrimary || event.button !== 0 || latest.current.disabled || !latest.current.onMove) return;
       const target = event.target as HTMLElement;
-      // An image-only tile still needs a generous selection target. Its quick
-      // tap opens the preview; a touch hold owns and suppresses that click.
+      // An image-only tile still needs a generous selection target. A touch hold
+      // owns and suppresses the normal click on an image or attachment.
       const touchPreview = event.pointerType === 'touch' && target.closest('.open-image,.open-attachment');
       if (target.closest(interactive) && !touchPreview) return;
       const card = target.closest<HTMLElement>('.note-card');

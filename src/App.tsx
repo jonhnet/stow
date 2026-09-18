@@ -1,4 +1,5 @@
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from 'react';
+import { flushSync } from 'react-dom';
 import {
   Archive, ArchiveRestore, ArrowLeft, Check, CheckSquare,
   Cloud, CloudOff, Copy, Download, DownloadCloud, History, ImagePlus, LayoutGrid,
@@ -98,7 +99,7 @@ const NoteCard = memo(function NoteCard({ note, labels, onOpen, selected, select
   const mutate = (patch: Parameters<typeof store.vault.setNoteMeta>[1]) => store.vault.setNoteMeta(note.id, patch);
   return <article className={`note-card ${selected ? 'selected' : ''} ${selecting ? 'selecting' : ''}`} style={{ backgroundColor: noteColor(note.color) }} tabIndex={0} aria-keyshortcuts={selecting ? undefined : "Alt+ArrowLeft Alt+ArrowRight Alt+ArrowUp Alt+ArrowDown"} aria-description={selecting ? "Select or deselect this note." : "Drag to reorder, or use Alt with arrow keys. Enter opens this note."} aria-label={`Open note: ${note.title || 'Untitled note'}`} onClick={() => { selecting ? onSelect(note.id) : onOpen(note.id); }} onKeyDown={e => { if (e.target === e.currentTarget && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); selecting ? onSelect(note.id) : onOpen(note.id); } }}>
     <button type="button" className={`select-note ${selected ? 'is-selected' : ''}`} aria-label={selected ? 'Deselect note' : 'Select note'} aria-pressed={selected} onClick={e => { e.stopPropagation(); onSelect(note.id); }}>{selected && <Check size={16} />}</button>
-    {note.images.length > 0 && <div className="card-images">{note.images.slice(0, 2).map(img => <NoteImage key={img.id} attachment={img} />)}</div>}
+    {note.images.length > 0 && <div className="card-images">{note.images.slice(0, 2).map(img => <NoteImage key={img.id} attachment={img} zoomable={false} />)}</div>}
     <div className="card-content">
       {note.title && <h2>{note.title}</h2>}
       {body && <Markdown interactive={false} className="card-body" text={body} />}
@@ -238,7 +239,17 @@ function NoteEditor({ note: savedNote, initial, onCreated, labels, onClose: clos
     <div ref={dialog} {...boundaries.events} className="note-editor" style={{ backgroundColor: noteColor(note.color) }} role="dialog" aria-modal="true" aria-label={showingHistory ? 'Version history' : 'Edit note'} onKeyDown={keyDown} onPaste={e => { if (e.clipboardData.files.length) { e.preventDefault(); void addImages(e.clipboardData.files); } }} onDragOver={e => e.preventDefault()} onDrop={e => { e.preventDefault(); void addImages(e.dataTransfer.files); }}>
       {showingHistory ? <NoteHistory note={note} onBack={backToNote} onRestore={onRestore} onError={onError} /> : <>
       <input ref={fileRef} type="file" accept="image/*" multiple hidden onChange={e => { const files = Array.from(e.currentTarget.files || []); e.currentTarget.value = ''; void addImages(files); }} />
-      <div className="editor-scroll">
+      <div className="editor-scroll" onClick={event => {
+        if (note.trashed || !(event.target as Element).matches('.editor-scroll, .editor-section, .editor-date')) return;
+        const field = event.currentTarget.querySelector<HTMLElement>('.editor-body');
+        if (!field || event.clientY < field.getBoundingClientRect().bottom) return;
+        event.preventDefault();
+        // Blank space beneath the body means append, even after editing elsewhere.
+        // Mount the source field now so the next keystroke uses its final position.
+        flushSync(() => field.focus({ preventScroll: true }));
+        const source = event.currentTarget.querySelector<HTMLTextAreaElement>('textarea.editor-body');
+        source?.setSelectionRange(source.value.length, source.value.length);
+      }}>
         {note.trashed && <div className="trash-banner">This note is in the trash.<button onClick={() => { store.vault.setNoteMeta(note.id, { trashed: false }); }}>Restore</button></div>}
         <section className="editor-section">
           {note.images.length > 0 && <div className="editor-images">{note.images.map(img => <NoteImage key={img.id} attachment={img} onRemove={note.trashed ? undefined : () => store.vault.removeAttachment(img.id)} />)}</div>}

@@ -113,7 +113,9 @@ export default function MarkdownField({ value, inline = false, className = '', o
     }} onClick={event => {
       if ((event.target as HTMLElement).closest('a') || props.disabled) return;
       if (event.detail > 0) {
-        const offset = markdownCaretAtPoint(event.currentTarget, event.clientX, event.clientY) ?? value.length;
+        const content = event.currentTarget.firstElementChild?.getBoundingClientRect();
+        const belowText = !inline && content && event.clientY >= content.bottom;
+        const offset = belowText ? value.length : markdownCaretAtPoint(event.currentTarget, event.clientX, event.clientY) ?? value.length;
         selection.current = { start: offset, end: offset, direction: 'none' };
       }
       event.preventDefault();

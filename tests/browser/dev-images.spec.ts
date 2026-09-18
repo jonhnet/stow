@@ -54,8 +54,9 @@ async function verifyOnAnotherDevice(browser: Browser, origin: string, title: st
     await page.goto(origin);
     expect((await thumbnail).status()).toBe(200);
     await expect(card(page, title).getByRole('img', { name: filename, exact: true })).toBeVisible();
+    await card(page, title).getByRole('img', { name: filename, exact: true }).click();
     const original = page.waitForResponse(response => response.request().method() === 'GET' && response.url() === blobUrl);
-    await card(page, title).getByRole('button', { name: `Open original: ${filename}`, exact: true }).click();
+    await editor(page).getByRole('button', { name: `Open original: ${filename}`, exact: true }).click();
     const downloaded = await original;
     expect(downloaded.status()).toBe(200);
     expect(await downloaded.body()).toEqual(png);

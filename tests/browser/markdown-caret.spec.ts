@@ -19,6 +19,7 @@ async function openRenderedNote(page: Page, source: string) {
   await dialog(page).getByRole('button', { name: 'Close', exact: true }).click();
   await page.getByRole('article', { name: 'Open note: Caret placement', exact: true }).click();
   await expect(body(page)).toHaveAttribute('aria-readonly', 'true');
+  await body(page).click({ trial: true });
 }
 
 // Click inside the left/right part of a rendered glyph, away from the ambiguous
@@ -52,6 +53,12 @@ async function expectInsertion(page: Page, field: Locator, source: string, offse
   expect(await field.evaluate((input: HTMLTextAreaElement) => [input.selectionStart, input.selectionEnd])).toEqual([offset, offset]);
   await page.keyboard.insertText('X');
   await expect(field).toHaveValue(source.slice(0, offset) + 'X' + source.slice(offset));
+}
+
+async function bottomSpace(page: Page) {
+  await dialog(page).locator('.editor-date').click({ trial: true });
+  const bounds = (await dialog(page).locator('.editor-date').boundingBox())!;
+  return { x: bounds.x + 24, y: bounds.y + bounds.height - 5 };
 }
 
 test('clicks distinguish repeated words across headings, paragraphs, and list items', async ({ page }) => {
@@ -111,6 +118,28 @@ test('clicking whitespace beside a rendered line places the caret at that line e
   await expectInsertion(page, body(page), source, source.indexOf('\n'));
 });
 
+test('clicking below rendered text appends after trailing Markdown and blank lines', async ({ page }) => {
+  const source = 'Last **word**\n\n';
+  await openRenderedNote(page, source);
+  const field = (await body(page).boundingBox())!;
+  const rendered = (await body(page).locator('.markdown-body').boundingBox())!;
+  const bottom = rendered.y + rendered.height;
+  expect(field.y + field.height - bottom).toBeGreaterThan(2);
+  await page.mouse.click(field.x + 20, (bottom + field.y + field.height) / 2);
+  await expectInsertion(page, body(page), source, source.length);
+});
+
+test('clicking the bottom blank space appends instead of restoring an earlier selection', async ({ page }) => {
+  const source = 'First line.\nLast **word**\n\n';
+  await openRenderedNote(page, source);
+  await body(page).focus();
+  await body(page).evaluate((input: HTMLTextAreaElement) => input.setSelectionRange(0, 5));
+  await title(page).focus();
+  const point = await bottomSpace(page);
+  await page.mouse.click(point.x, point.y);
+  await expectInsertion(page, body(page), source, source.length);
+});
+
 test('a pointer chooses a new caret while programmatic focus preserves the saved selection', async ({ page }) => {
   const source = 'Before **coffee** and after.';
   await openRenderedNote(page, source);
@@ -140,6 +169,14 @@ test('clicking formatted checklist text edits the clicked character without chec
 
 test.describe('phone taps', () => {
   test.use({ viewport: { width: 390, height: 720 }, isMobile: true, hasTouch: true });
+
+  test('tapping the bottom blank space starts typing at the end of the free text', async ({ page }) => {
+    const source = 'Last **word**\n\n';
+    await openRenderedNote(page, source);
+    const point = await bottomSpace(page);
+    await page.touchscreen.tap(point.x, point.y);
+    await expectInsertion(page, body(page), source, source.length);
+  });
 
   test('a tap on wrapped rendered text places the source caret at that text', async ({ page }) => {
     const source = '**Start** with enough words to wrap this paragraph onto several lines before the destination appears here.';

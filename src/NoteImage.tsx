@@ -55,7 +55,7 @@ function OriginalAttachment({ attachment, onClose }: { attachment: Attachment; o
   </div>, document.body);
 }
 
-type AttachmentProps = { attachment: Attachment; onRemove?: () => void };
+type AttachmentProps = { attachment: Attachment; onRemove?: () => void; zoomable?: boolean };
 
 function FileAttachment({ attachment, onRemove }: AttachmentProps) {
   const [viewing, setViewing] = useState(false);
@@ -66,7 +66,7 @@ function FileAttachment({ attachment, onRemove }: AttachmentProps) {
   </div>;
 }
 
-function ImagePreview({ attachment, onRemove }: AttachmentProps) {
+function ImagePreview({ attachment, onRemove, zoomable = true }: AttachmentProps) {
   const [url, setUrl] = useState<string>();
   const [message, setMessage] = useState<string>();
   const [viewing, setViewing] = useState(false);
@@ -87,10 +87,9 @@ function ImagePreview({ attachment, onRemove }: AttachmentProps) {
     void retrieve();
     return () => { live = false; clearTimeout(timer); lease?.release(); };
   }, [attachment.hash, status]);
+  const preview = url ? <img src={url} alt={attachment.name} loading="lazy" /> : <span className="image-placeholder"><ImagePlus size={24} /><span>{attachment.name}</span>{message && <small>{message}</small>}</span>;
   return <div className="note-image">
-    <button className="open-image" aria-label={`Open original: ${attachment.name}`} onClick={event => { event.stopPropagation(); setViewing(true); }}>
-      {url ? <img src={url} alt={attachment.name} loading="lazy" /> : <span className="image-placeholder"><ImagePlus size={24} /><span>{attachment.name}</span>{message && <small>{message}</small>}</span>}
-    </button>
+    {zoomable ? <button className="open-image" aria-label={`Open original: ${attachment.name}`} onClick={event => { event.stopPropagation(); setViewing(true); }}>{preview}</button> : <div className="open-image">{preview}</div>}
     {onRemove && <button type="button" className="icon-button remove-image" aria-label={`Remove ${attachment.name}`} onClick={event => { event.stopPropagation(); onRemove(); }}><X size={16} /></button>}
     {viewing && <OriginalAttachment attachment={attachment} onClose={() => setViewing(false)} />}
   </div>;

@@ -94,8 +94,13 @@ test('kitten images open from bundled files and unsupported features explain the
   await expect.poll(() => picture.evaluate((image: HTMLImageElement) => image.naturalWidth)).toBeGreaterThan(0);
   const url = await picture.getAttribute('src'); expect(url).toMatch(/^\/assets\/\d\d-.*\.webp$/);
   await picture.click();
+  const editor = page.getByRole('dialog', { name: 'Edit note', exact: true });
+  await expect(editor).toBeVisible();
+  await expect(page.getByRole('dialog', { name: /^Original image:/ })).toHaveCount(0);
+  await editor.getByRole('img').first().click();
   await expect(page.getByRole('dialog', { name: /^Original image:/ }).locator('img')).toHaveAttribute('src', url!);
   await page.getByRole('button', { name: 'Close image', exact: true }).click();
+  await editor.getByRole('button', { name: 'Close', exact: true }).click();
   await card(page, committee).getByRole('heading').click();
   await expect(page.getByRole('button', { name: 'Add image', exact: true })).toBeDisabled();
   await page.getByRole('button', { name: 'More note actions', exact: true }).click();
@@ -127,6 +132,7 @@ test('the warning stays visible on phones, including collapsed and while editing
   await page.getByRole('button', { name: 'Close', exact: true }).click();
   await notice(page).getByRole('button', { name: /DEMO/ }).click();
   await page.locator('.card-images img').first().click();
+  await page.getByRole('dialog', { name: 'Edit note', exact: true }).getByRole('img').first().click();
   const close = page.getByRole('button', { name: 'Close image', exact: true });
   await expect(close).toBeVisible();
   const expandedBanner = await notice(page).boundingBox(), closeButton = await close.boundingBox();
