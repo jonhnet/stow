@@ -143,7 +143,17 @@ test('the warning stays visible on phones, including collapsed and while editing
 test('pasting or dropping images is rejected without creating notes or attachments', async ({ page }) => {
   await guardSideEffects(page); await page.goto('/');
   await expect(card(page, committee)).toBeVisible();
-  const count = await page.getByRole('article').count();
+  const exportNotes = async () => {
+    await page.getByRole('button', { name: 'Settings', exact: true }).click();
+    const download = page.waitForEvent('download');
+    await page.getByRole('button', { name: 'Export current notes', exact: true }).click();
+    const file = await download;
+    await page.keyboard.press('Escape');
+    return readFileSync((await file.path())!, 'utf8');
+  };
+  // Mounted card counts change as the virtualized grid measures images/text.
+  // Compare the full exported content, including notes outside the viewport.
+  const before = await exportNotes();
   for (const action of ['paste', 'drop'] as const) {
     await page.locator('.composer').evaluate((element, action) => {
       const transfer = new DataTransfer();
@@ -155,7 +165,7 @@ test('pasting or dropping images is rejected without creating notes or attachmen
       element.dispatchEvent(event);
     }, action);
     await expect(page.getByRole('status').filter({ hasText: 'Image uploads are unavailable in the demo' })).toBeVisible();
-    await expect(page.getByRole('article')).toHaveCount(count);
+    await expect(page.getByRole('button', { name: 'Undo', exact: true })).toBeDisabled();
     await expect(page.getByRole('dialog', { name: 'Edit note' })).toHaveCount(0);
   }
   await card(page, committee).getByRole('heading').click();
@@ -167,6 +177,7 @@ test('pasting or dropping images is rejected without creating notes or attachmen
   await expect(editor.locator('.note-image')).toHaveCount(0);
   await page.getByRole('button', { name: 'Close', exact: true }).click();
   await expect(page.getByRole('button', { name: 'Undo', exact: true })).toBeDisabled();
+  expect(await exportNotes()).toBe(before);
   expect(await page.evaluate(() => (window as any).demoAttempts)).toEqual([]);
 });
 

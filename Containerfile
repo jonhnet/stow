@@ -11,7 +11,7 @@ RUN mkdir -p /stow/build/tmp \
     && /stow/build/node_modules/.bin/tsc --noEmit \
     && /stow/build/node_modules/.bin/vite build
 
-FROM docker.io/library/rust:1.94.1-bookworm AS backend
+FROM docker.io/library/rust:1.95.0-bookworm AS backend
 ENV CARGO_HOME=/stow/build/cargo-home CARGO_TARGET_DIR=/stow/build/cargo-target
 WORKDIR /stow/stow-git
 COPY Cargo.toml Cargo.lock ./

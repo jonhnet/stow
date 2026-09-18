@@ -611,6 +611,17 @@ impl Vault {
         Ok(())
     }
     pub fn capture_history(&mut self, boundary: &Value, now: f64) -> Result<Vec<String>> {
+        #[cfg(test)]
+        if self.history.faults.remove("panicCapture") {
+            // Prove recovery discards memory mutated before unwinding.
+            crate::crdt::put(
+                &mut self.doc.transact_mut(),
+                "notes",
+                "panic-only",
+                json!({"body":"Not durable"}),
+            );
+            panic!("Injected history capture panic");
+        }
         self.recover_history()?;
         let selected: Ids = strings(&boundary["sourceIds"]).into_iter().collect();
         let groups = state::groups(&self.doc);

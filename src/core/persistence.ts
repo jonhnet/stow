@@ -1,7 +1,7 @@
 import * as Y from 'yjs';
-import { openPersistenceDatabase, type PersistenceConnection } from './persistence-database';
+import { openPersistenceDatabase, StorageUpdateRequired, type PersistenceConnection } from './persistence-database';
 import { browserPersistenceWriter } from './persistence-worker-client';
-import type { PersistenceWriter } from './persistence-write';
+import { inlinePersistenceWriter, type PersistenceWrite, type PersistenceWriter } from './persistence-write';
 import { startupCount, startupMark } from './startup-diagnostics';
 import { enforcePermanentDeletions, PERMANENT_DELETION_ORIGIN } from './deletion';
 import { isEmptyUpdate, applyStoredUpdates } from './yjs-updates';
@@ -25,6 +25,7 @@ interface PersistenceOptions {
   edits?: EditRecovery;
   writer?: PersistenceWriter;
   undo?: { manager: Y.UndoManager; ownership: EditOwnership; preferredOwner?: string; onOwner?: (owner: string) => void };
+  onUpgrade?: (version: number) => void;
 }
 
 /** Append CRDT updates locally, reporting durability only after transaction completion. */
@@ -39,6 +40,8 @@ export class LocalPersistence {
   private destroyed = false;
   private writing?: Promise<void>;
   private closing?: Promise<void>;
+  private upgradeClosing?: Promise<void>;
+  private upgrading = false;
   private flushScheduled = false;
   private compactRequested = 0;
   private compactCompleted = 0;
@@ -141,7 +144,11 @@ export class LocalPersistence {
       }
       startupMark('idb-open-start');
       this.db = await openPersistenceDatabase(this.options.databaseName,
-        () => { this.db?.close(); this.report(new Error('Local storage needs to upgrade. Reload Stow before editing further.')); },
+        version => {
+          const closing = this.closeForUpgrade();
+          this.options.onUpgrade?.(version);
+          void closing.catch(reason => this.report(reason));
+        },
         () => this.report(new Error('The browser closed local storage. Reload Stow to reconnect.')));
       startupMark('idb-open-end');
       await this.openUndo();
@@ -188,7 +195,11 @@ export class LocalPersistence {
       this.db?.close();
       this.releaseOwner?.(); this.releaseOwner = undefined;
       this.releaseUndo?.(); this.releaseUndo = undefined;
-      throw this.report(reason instanceof Error && reason.name === 'VersionError' ? new Error('This browser has an older Stow storage format. Clear this account’s local cache before opening a freshly imported vault.') : reason);
+      if (reason instanceof StorageUpdateRequired) {
+        this.undoCleanupRequested = false;
+        throw reason;
+      }
+      throw this.report(reason);
     }
   }
 
@@ -253,8 +264,8 @@ export class LocalPersistence {
       if (!changes.length) return;
       // Retire the records and release their retained content atomically. Keep
       // all owner locks through worker completion, including a failed write.
-      const result = await this.writer.write(this.db!, { batch: [], forceCompact: true,
-        vector: Y.encodeStateVector(this.doc), retired: [], undoCleanup: changes }, () => startupMark('idb-compact-start'));
+      const result = await this.write({ batch: [], forceCompact: true,
+        vector: Y.encodeStateVector(this.doc), retired: [], undoCleanup: changes });
       if (result.compaction) startupMark('idb-compact-end');
       if (result.correction && !isEmptyUpdate(result.correction)) Y.applyUpdate(this.doc, result.correction, this);
     } finally {
@@ -291,6 +302,17 @@ export class LocalPersistence {
     }
   }
 
+  private async write(request: PersistenceWrite) {
+    const writer = this.writer;
+    try { return await writer.write(this.db!, request, () => startupMark('idb-compact-start')); }
+    catch (error) {
+      // Upgrade can interrupt startup recovery as well as an ordinary flush.
+      // Retry the same retained request on the connection holding up the upgrade.
+      if (!this.upgrading || writer === this.writer) throw error;
+      return this.writer.write(this.db!, request, () => startupMark('idb-compact-start'));
+    }
+  }
+
   private async writePending() {
     if (!this.db) throw new Error('Local storage is not open.');
     while (this.hasPendingWork()) {
@@ -305,7 +327,7 @@ export class LocalPersistence {
       const draftVersion = this.draftVersion, draft = this.draft;
       const retired = [...this.retired];
       const undoVersion = this.undoVersion;
-      const result = await this.writer.write(this.db, {
+      const result = await this.write({
         batch, forceCompact, vector: Y.encodeStateVector(this.doc), retired,
         ...(this.undoOwner && undoVersion > this.undoCompleted ? { undo: {
           owner: this.undoOwner, state: saveUndo(this.options.undo!.manager),
@@ -314,7 +336,7 @@ export class LocalPersistence {
           owner: this.options.edits.owner,
           draft: draft && redactPendingEdit(draft, this.doc.getMap('deletedNotes')),
         } } : {}),
-      }, () => startupMark('idb-compact-start'));
+      });
       if (result.compaction) startupMark('idb-compact-end');
       if (result.correction && !isEmptyUpdate(result.correction)) Y.applyUpdate(this.doc, result.correction, this);
       // Keep failed batches queued, and count in-flight writes until commit.
@@ -335,7 +357,7 @@ export class LocalPersistence {
     let failed = false;
     const task = (async () => {
       try { await this.writePending(); }
-      catch (reason) { failed = true; throw this.report(reason); }
+      catch (reason) { failed = true; throw this.upgrading ? reason : this.report(reason); }
       finally {
         this.writing = undefined;
         // An update may have arrived after the drain's final check, while its
@@ -358,7 +380,7 @@ export class LocalPersistence {
    * This local marker follows durable current data and never appends a CRDT edit. */
   async markSynchronized(): Promise<void> {
     await this.whenDurable();
-    if (this.synchronized) return;
+    if (this.synchronized || this.upgrading || this.destroyed) return;
     try {
       const transaction = this.db!.transaction('maintenance', 'readwrite');
       const done = transaction.done; void done.catch(() => {});
@@ -367,6 +389,27 @@ export class LocalPersistence {
       await done;
       this.synchronized = true;
     } catch (reason) { throw this.report(reason); }
+  }
+
+  /** Drain on the existing connection before allowing IndexedDB's exclusive
+   * upgrade. A worker opening/reopening its connection would wait behind that
+   * same upgrade. Retained batches can be replayed even if it committed just
+   * before termination: Yjs updates and the associated metadata are idempotent. */
+  closeForUpgrade(): Promise<void> {
+    this.upgradeClosing ??= (async () => {
+      this.upgrading = true;
+      const writing = this.writing;
+      this.writer.close();
+      this.writer = inlinePersistenceWriter;
+      await writing?.catch(() => {});
+      return this.destroy().catch(error => {
+        // A rejected open has not read or authored data. The newer database is
+        // left untouched and reloading is safe.
+        if (!(error instanceof StorageUpdateRequired) || this.hasPendingWork()) throw error;
+      });
+    })();
+    void this.upgradeClosing.catch(() => {});
+    return this.upgradeClosing;
   }
 
   /** Stop listening, flush captured edits, then close; reject if durability failed. */

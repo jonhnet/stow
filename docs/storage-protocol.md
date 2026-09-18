@@ -2,7 +2,7 @@
 
 ## Browser persistence
 
-The account-scoped IndexedDB schema is version 2, with four stores:
+The account-scoped IndexedDB schema is version 4, with four stores:
 
 | Store | Contents |
 | --- | --- |
@@ -25,11 +25,29 @@ Outgoing updates and tab responses wait for local durability. Otherwise a receiv
 
 Worker death before a write, during compaction, or after commit leaves unacknowledged input retryable. Page departure waits for durability before releasing the worker and vault; a failed departure retains the in-memory current data and offers an emergency backup. Returning through browser navigation history reloads durable data. Storage protection is requested only through the explicit Settings button. Incremental label invalidation, memoized checklist rows, textarea measurement, cooperative search construction, and account-scoped tab broadcasts remain in place.
 
-## Sync protocol 3
+## Compatibility epoch 4
 
-Protocol 3 retains protocol 2's frame format, but requires readers to understand
-body-to-checklist conversion masks and duplicate projections. Earlier clients
-must reload before syncing; the current vault schema and existing data stay valid.
+`SYNC_PROTOCOL_VERSION` is a compatibility epoch shared by server admission,
+tab broadcast channel names, and the IndexedDB version. Bump it only when older
+clients must stop participating; ordinary releases keep it unchanged and leave
+open notes and tabs alone. Keep the Rust server constant in step with the browser.
+
+Epoch 4 retains protocol 3's conversion masks and protocol 2's frame format, and
+adds isolation through browser storage and tab broadcasts. Broadcast channels
+include the verified vault ID, schema and epoch; they never answer unversioned
+legacy hellos. An in-place IndexedDB upgrade keeps current updates, pending edit
+metadata and Undo, but first requires every older connection to close. A notified
+tab freezes editing, stops server and tab communication, finishes its pending
+edit and drains retained writes before closing storage. The drain uses the
+existing main-thread connection: reopening a worker connection could deadlock
+behind the upgrade it is blocking. Failed saves retain in-memory notes for export
+and prevent reload. Opening an already newer cache reports an update requirement
+without reading or rewriting it. No data is copied between account caches.
+
+Already-running clients from before these safeguards cannot gain the new reload
+notice retroactively. Their old channels are isolated, and upgrading IndexedDB
+closes their old handles and prevents reopening at the old version. Close those
+legacy tabs once when first deploying this release.
 
 Conversion records carry the identities of the source characters and their
 initial text/rank. Equivalent conversions display once; intentional repeated
@@ -47,7 +65,7 @@ masked spans. This retains original converted text as current structural data
 Permanent source deletion removes the owning note and its masks. Both browser
 projection and Rust history capture apply these rules without writing repairs.
 
-WebSocket admission requires both `protocol=3` and `schema=stow-current-v1`, plus the exact verified `vaultId`. Rejection happens before opening account data. Password/proxy authentication, private proxy proof, incarnation reset, origin rules, and account-scoped HTTP headers remain required.
+WebSocket admission requires both `protocol=4` and `schema=stow-current-v1`, plus the exact verified `vaultId`. Rejection happens before opening account data. Password/proxy authentication, private proxy proof, incarnation reset, origin rules, and account-scoped HTTP headers remain required.
 
 Browsers send `X-Stow-Sync-Protocol` and `X-Stow-Schema` on the authenticated
 `/api/session` check. An incompatible client receives the verified account plus
@@ -61,7 +79,8 @@ identity-only callers remain supported, but cannot bypass WebSocket admission.
 Authentication, origin and vault identity checks run before this rejection path.
 Account changes take priority over update handling.
 
-`action: "reload"` leaves a persistent notice and stops sync. The client reloads
+`client_update_required` isolates the tab as above and leaves a persistent notice.
+For `action: "reload"`, the client reloads
 after five seconds of inactivity in a visible page, with no active input
 composition, pending local note/image writes, or local storage failure. It
 finishes the edit, awaits IndexedDB durability, then rechecks activity and safety
@@ -69,7 +88,9 @@ before navigation. This preserves offline content without waiting for a server
 acknowledgment. The local Undo/Redo stack is committed with the edits. One automatic attempt
 per account and required target is recorded in sessionStorage; a still-rejected
 bundle keeps the notice and a manual Reload button instead of looping. Storage
-failure prevents automatic navigation. `action: "none"` surfaces the rejection
+failure prevents automatic navigation and offers a current-notes export. The
+open note remains in browser navigation state and reopens after reload.
+`action: "none"` surfaces the rejection
 without scheduling a reload.
 
 All messages use `SyncTransfer`: JSON control frames (`begin`, receipts, `done`, failure) and ordered binary chunks, each with an eight-byte transfer-ID/offset prefix. SHA-256 validates a complete logical unit before application. Chunk receipts grant flow-control credit; `done` follows fsync on the server or IndexedDB commit in the browser. Lost acknowledgments replay safely through Yjs idempotence.
@@ -92,6 +113,6 @@ Client-initiated failure closes use application codes 4008 (invalid), 4009 (limi
 
 Logical kinds are `sync-request`, `sync`, `update`, `history-boundary`, `sync-complete`, `history-changed`, and `history-failure`. `sync-request` is a Yjs state vector. `sync` is UTF-8 `stow-current-v1` plus NUL, a four-byte big-endian vector length, then vector and current update. The client validates this marker before applying data. `update` is binary Yjs. History kinds carry UTF-8 JSON; `history-boundary` carries the boundary object directly and `sync-complete` carries `{}`. Notifications carry their corresponding object, including `type` and source IDs or error message.
 
-History hints are ordered after the durable acknowledgment of the corresponding current upload. They have no offline outbox. Invalid history hints or history-write failures do not reject current updates or close the connection. Optional hint/notification admission failure does not close current sync. The initial `sync-complete` captures the sources accepted during catch-up once; an unchanged reload creates no arbitrary version. The client waits for outstanding hints before on-demand history or complete export, avoiding an HTTP read racing its own history request.
+History hints are ordered after the durable acknowledgment of the corresponding current upload. They have no offline outbox. Invalid history hints or history-write failures do not reject current updates or close the connection. A panic during capture is caught before it can poison the account lock; the server discards the in-memory vault and reopens durable current and history files. If reopening fails, subsequent operations retry recovery before accessing that account. Optional hint/notification admission failure does not close current sync. The initial `sync-complete` captures the sources accepted during catch-up once; an unchanged reload creates no arbitrary version. The client waits for outstanding hints before on-demand history or complete export, avoiding an HTTP read racing its own history request.
 
-The server leases cached vaults during requests and connections and evicts idle documents after 30 seconds, after queued operations settle. Current-only emergency export and complete online export are distinct operations.
+The server leases cached vaults during requests and connections and evicts idle documents after 30 seconds, after queued operations settle. A panic while opening one vault is caught before it can poison the shared account registry. Current-only emergency export and complete online export are distinct operations.

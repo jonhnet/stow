@@ -86,20 +86,15 @@ test('three simultaneous tab openings converge and replies are addressed to the 
   } finally { docs.forEach(doc => doc.destroy()); }
 });
 
-test('tabs from the previous build can still exchange binary updates and bare hellos', () => {
+test('unversioned legacy hellos cannot request a full current vault', () => {
   const current = new Y.Doc(), old = new Y.Doc();
   try {
     current.getMap('data').set('current', true);
     old.getMap('data').set('old', true);
     const sent: unknown[] = [];
     const sync = new TabSync(current, message => sent.push(message));
-    // The old handler recognizes hello (ignoring extra fields) and returns a full update.
     assert.equal(sync.hello().type, 'hello');
-    sync.receive(Y.encodeStateAsUpdate(old));
-    sync.receive({ type: 'hello' });
-    assert.equal(sent.length, 1);
-    assert(sent[0] instanceof Uint8Array);
-    Y.applyUpdate(old, sent[0]);
-    assert.deepEqual(old.getMap('data').toJSON(), current.getMap('data').toJSON());
+    assert.throws(() => sync.receive({ type: 'hello' }), /Invalid tab state vector/);
+    assert.equal(sent.length, 0);
   } finally { current.destroy(); old.destroy(); }
 });

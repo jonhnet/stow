@@ -59,8 +59,14 @@ impl<T> Cache<T> {
         let entry = if let Some(e) = entries.get(id) {
             e.clone()
         } else {
+            // Opening can run CRDT decoding and history recovery. Do not let a
+            // panic poison the registry shared by every other account.
+            let value =
+                std::panic::catch_unwind(std::panic::AssertUnwindSafe(open)).map_err(|_| {
+                    Error::request(503, "Vault opening panicked; reconnect to retry.")
+                })??;
             let e = Arc::new(Entry {
-                value: Mutex::new(open()?),
+                value: Mutex::new(value),
                 users: AtomicUsize::new(0),
                 idle_since: Mutex::new(Instant::now()),
             });
@@ -137,6 +143,32 @@ mod tests {
         assert!(cache.acquire("b", || Ok(2)).is_err());
         cache.close();
         assert_eq!(*held.lock().unwrap(), 1);
+    }
+
+    #[test]
+    fn panicked_open_does_not_poison_other_accounts_or_prevent_retry() {
+        let cache = Cache::<u8>::default();
+        let existing = cache.acquire("existing", || Ok(1)).unwrap();
+        assert!(
+            cache
+                .acquire("failed", || panic!("Injected opening panic"))
+                .is_err()
+        );
+        assert_eq!(
+            *cache
+                .acquire("existing", || unreachable!())
+                .unwrap()
+                .lock()
+                .unwrap(),
+            1
+        );
+        assert_eq!(*cache.acquire("new", || Ok(2)).unwrap().lock().unwrap(), 2);
+        assert_eq!(
+            *cache.acquire("failed", || Ok(3)).unwrap().lock().unwrap(),
+            3
+        );
+        drop(existing);
+        cache.evict().unwrap();
     }
 
     #[test]

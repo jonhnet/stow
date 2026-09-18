@@ -5,12 +5,61 @@ import { beforeEach, test, type TestContext } from 'node:test';
 import { openDB } from 'idb';
 import * as Y from 'yjs';
 import { LocalPersistence } from '../src/core/persistence';
+import { PERSISTENCE_VERSION, StorageUpdateRequired } from '../src/core/persistence-database';
 import { inlinePersistenceWriter } from '../src/core/persistence-write';
 import { Vault } from '../src/core/vault';
 import { isEmptyUpdate, applyStoredUpdates } from '../src/core/yjs-updates';
 import { assertNoReplicatedHistory } from './history-state-fixture';
 
 beforeEach(() => { globalThis.indexedDB = new IDBFactory(); });
+
+for (const duringStartup of [false, true]) test(`a compatibility upgrade drains a pending worker batch (startup: ${duringStartup})`, async t => {
+  const doc = new Y.Doc(), errors: Error[] = [];
+  const name = 'upgrade-drain';
+  let entered!: () => void, rejectWrite: ((error: Error) => void) | undefined;
+  const writing = new Promise<void>(resolve => { entered = resolve; });
+  let notified = 0;
+  if (duringStartup) doc.getText('body').insert(0, 'Unsaved before upgrade');
+  const persistence = new LocalPersistence(doc, { databaseName: name,
+    onError: error => errors.push(error), onUpgrade: version => { notified = version; },
+    writer: { close() { rejectWrite?.(new Error('Worker stopped')); },
+      write() { return new Promise((_resolve, reject) => { rejectWrite = reject; entered(); }); } },
+  });
+  t.after(async () => { rejectWrite?.(new Error('Test finished')); await persistence.destroy().catch(() => {}); doc.destroy(); });
+  if (!duringStartup) {
+    await persistence.ready;
+    doc.getText('body').insert(0, 'Unsaved before upgrade');
+  }
+  await writing;
+  const newer = await openDB(name, PERSISTENCE_VERSION + 1);
+  try {
+    await persistence.closeForUpgrade();
+    assert.equal(notified, PERSISTENCE_VERSION + 1);
+    assert.deepEqual(errors, []);
+    const restored = new Y.Doc();
+    for (const update of await newer.getAll('updates')) Y.applyUpdate(restored, update);
+    assert.equal(restored.getText('body').toString(), 'Unsaved before upgrade');
+    restored.destroy();
+    const before = await newer.getAll('updates');
+    doc.getText('body').insert(doc.getText('body').length, ' Must stay isolated');
+    await new Promise(resolve => setTimeout(resolve, 0));
+    assert.deepEqual(await newer.getAll('updates'), before);
+  } finally { newer.close(); }
+});
+
+test('an older client cannot open a newer cache and can reload without clearing its contents', async () => {
+  const name = 'newer-cache';
+  const newer = await openDB(name, PERSISTENCE_VERSION + 1, { upgrade(db) { db.createObjectStore('proof'); } });
+  await newer.put('proof', 'Saved data', 'keep'); newer.close();
+  const doc = new Y.Doc(), errors: Error[] = [];
+  const persistence = new LocalPersistence(doc, { databaseName: name, writer: inlinePersistenceWriter, onError: error => errors.push(error) });
+  await assert.rejects(persistence.ready, StorageUpdateRequired);
+  await persistence.closeForUpgrade();
+  assert.deepEqual(errors, []);
+  const reopened = await openDB(name, PERSISTENCE_VERSION + 1);
+  assert.equal(await reopened.get('proof', 'keep'), 'Saved data');
+  reopened.close(); doc.destroy();
+});
 
 
 function device(t: TestContext, doc = new Y.Doc(), onError?: (error: Error) => void) {

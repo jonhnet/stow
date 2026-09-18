@@ -5,8 +5,9 @@ import { IdleUpdateReload, parseSyncRejection, type SyncRejection } from './clie
 import { useSyncExternalStore } from 'react';
 import * as Y from 'yjs';
 import { LocalPersistence } from './persistence';
+import { StorageUpdateRequired } from './persistence-database';
 import { browserEditOwnership } from './edit-ownership';
-import { TabSync } from './tab-sync';
+import { TabSync, tabChannelName } from './tab-sync';
 import { Vault } from './vault';
 import { ImageStore, type ImageProgress } from './images';
 import { getPermanentDeletionBlobCandidates, PERMANENT_DELETION_ORIGIN } from './deletion';
@@ -61,6 +62,8 @@ class StowStore {
   private syncStopped = false;
   private syncRejection: SyncRejection | null = null;
   private updateReload?: IdleUpdateReload;
+  private isolation?: Promise<void>;
+  private isolationComplete = true;
   private composing = false;
   private lastUpload: Promise<void> = Promise.resolve();
   private historyRequests = new Set<Promise<void>>();
@@ -157,7 +160,7 @@ class StowStore {
   private onUpdate = (update: Uint8Array, origin: unknown) => {
     this.updateDeletedImages();
     if (origin === 'broadcast' && this.vault.notes.size > 0) this.ready = true;
-    if (this.access === 'ready') {
+    if (this.access === 'ready' && !this.syncStopped) {
       if (origin !== 'broadcast') this.broadcastUpdates.push(update);
       if (origin !== 'remote') this.outgoingUpdates.push(update);
       if (!this.replicationScheduled) {
@@ -177,7 +180,7 @@ class StowStore {
       status: this.status, ready: this.ready, access: this.access, authMode: this.authMode,
       user: visible ? this.account?.user : undefined, accessMessage: this.accessMessage,
       error: this.localError ?? this.imageError ?? this.error, historyError: visible ? this.historyError : null,
-      canReload: this.localPending === 0 && this.imageWrites === 0 && !this.localError,
+      canReload: this.isolationComplete && this.localPending === 0 && this.imageWrites === 0 && !this.localError,
       syncRejection: this.syncRejection, automaticReload: this.updateReload?.automatic ?? false,
       canUndo: visible && this.vault.undoManager.undoStack.length > 0,
       canRedo: visible && this.vault.undoManager.redoStack.length > 0,
@@ -193,7 +196,7 @@ class StowStore {
     const broadcast = this.broadcastUpdates.splice(0);
     const outgoing = this.outgoingUpdates.splice(0);
     const boundaries = this.historyBoundaries.splice(0);
-    if (this.access !== 'ready') return;
+    if (this.access !== 'ready' || this.syncStopped) return;
     // Deliver current data before any hint asking the server to save a version.
     if (broadcast.length) this.broadcastAfterSave(Y.mergeUpdates(broadcast));
     if (outgoing.length) this.sendUpdate(Y.mergeUpdates(outgoing));
@@ -292,6 +295,10 @@ class StowStore {
     this.authMode = account.authMode;
     this.persistence = new LocalPersistence(this.vault.doc, {
       databaseName,
+      onUpgrade: version => this.rejectSync(account, {
+        code: 'client_update_required', action: 'reload', target: `${CURRENT_SCHEMA}/${version}`,
+        message: new StorageUpdateRequired(version).message,
+      }),
       undo: {
         manager: this.vault.undoManager, ownership,
         preferredOwner: history.state?.stowUndo?.databaseName === databaseName ? history.state.stowUndo.owner : undefined,
@@ -326,15 +333,15 @@ class StowStore {
     void this.images.ready.catch(() => {});
     await this.persistence.ready;
     startupMark('local-ready');
-    if (this.access === 'blocked' || this.parked) return;
+    if (this.access === 'blocked' || this.parked || this.syncStopped) return;
     // Loading does not replicate update bytes. Subscribe after persistence has
     // applied the local log, then perform the initial bookkeeping explicitly.
     this.vault.doc.on('update', this.onUpdate);
     this.updateDeletedImages();
-    this.channel = new BroadcastChannel(`stow-vault-${account.vaultId}`);
+    this.channel = new BroadcastChannel(tabChannelName(account.vaultId));
     const tabs = new TabSync(this.vault.doc, message => this.broadcastAfterSave(message));
     this.channel.addEventListener('message', event => {
-      if (this.access !== 'ready') return;
+      if (this.access !== 'ready' || this.syncStopped) return;
       try {
         tabs.receive(event.data);
       }
@@ -408,7 +415,7 @@ class StowStore {
       rememberAccount(account);
       if (rejection) {
         // Authenticate first, but do not open an incompatible cached vault on
-        // startup. An already open vault keeps its local writer and offline edits.
+        // startup. An already open vault drains pending edits before closing.
         this.rejectSync(account, rejection);
         return;
       }
@@ -485,7 +492,11 @@ class StowStore {
       socket.onerror = () => socket.close();
     } catch (error) {
       if (this.accountAbort.signal.aborted || this.parked) return;
-      if (this.syncStopped && (error instanceof NetworkError || error instanceof ServerUnavailableError)) return;
+      if (this.syncStopped) return;
+      if (error instanceof StorageUpdateRequired && this.account) {
+        this.rejectSync(this.account, { code: 'client_update_required', action: 'reload', target: 'browser-storage', message: error.message });
+        return;
+      }
       if (error instanceof ServerUnavailableError) {
         // Retry availability failures without treating them as authentication
         // or as permission to open an unverified account from the local cache.
@@ -500,7 +511,13 @@ class StowStore {
             const account = cachedAccount();
             if (!account) { this.accessMessage = 'Connect to the server once to identify and download your vault.'; this.status = 'offline'; this.refresh(); this.scheduleReconnect(); return; }
             await this.openAccount(account);
-          } catch (storageError) { this.block(storageError instanceof Error ? storageError.message : 'Could not open your offline vault.'); return; }
+          } catch (storageError) {
+            if (storageError instanceof StorageUpdateRequired && this.account) this.rejectSync(this.account, {
+              code: 'client_update_required', action: 'reload', target: 'browser-storage', message: storageError.message,
+            });
+            else this.block(storageError instanceof Error ? storageError.message : 'Could not open your offline vault.');
+            return;
+          }
         }
         this.status = 'offline'; this.refresh(); this.scheduleReconnect();
       } else {
@@ -529,9 +546,26 @@ class StowStore {
     this.closeSocket(); this.status = 'error';
     this.error = null;
     this.syncRejection = rejection;
+    if (rejection.code === 'client_update_required') {
+      clearTimeout(this.imageTimer);
+      this.channel?.close(); this.channel = undefined;
+      this.broadcastUpdates = []; this.durableBroadcasts = []; this.outgoingUpdates = [];
+      this.accountAbort.abort();
+      // Editing is now frozen, including IME input. Commit its observed text
+      // and timestamps before the persistence listeners and owner locks close.
+      this.vault.finishEdit(true);
+      if (!this.isolation) this.isolationComplete = false;
+      this.isolation ??= (this.persistence?.closeForUpgrade() ?? Promise.resolve()).then(() => {
+        this.isolationComplete = true; this.refresh();
+      }, error => {
+        this.localError = 'Local storage failed. Export your notes before leaving this tab.';
+        this.refresh(); throw error;
+      });
+      void this.isolation.catch(() => {});
+    }
     this.updateReload?.stop(); this.updateReload = undefined;
     if (rejection.action === 'reload') this.updateReload = new IdleUpdateReload(account.vaultId, rejection.target, {
-      safe: () => !this.parked && !this.composing && this.access !== 'blocked' && this.access !== 'locked' && this.localPending === 0 && this.imageWrites === 0 && !this.localError,
+      safe: () => this.isolationComplete && !this.parked && !this.composing && this.access !== 'blocked' && this.access !== 'locked' && this.localPending === 0 && this.imageWrites === 0 && !this.localError,
       save: () => this.saveBeforeReload(),
       reload: () => location.reload(),
       failed: () => this.refresh(),
@@ -553,6 +587,7 @@ class StowStore {
 
   private async saveBeforeReload() {
     try {
+      if (this.isolation) { await this.isolation; return; }
       this.vault.finishEdit();
       this.flushReplication();
       if (this.persistence) await this.persistence.whenDurable();
@@ -570,7 +605,7 @@ class StowStore {
   }
 
   private requireAccount() {
-    if (!this.account || this.access !== 'ready') throw new Error('The active account changed. Reload Stow before editing or syncing images.');
+    if (!this.account || this.access !== 'ready' || this.syncStopped) throw new Error('Reload Stow before editing or syncing this account.');
     return this.account;
   }
 
@@ -712,20 +747,20 @@ class StowStore {
   }
 
   private updateDeletedImages() {
-    if (!this.images || !this.vault.doc.getMap('deletedBlobCandidates').size) return;
+    if (this.syncStopped || !this.images || !this.vault.doc.getMap('deletedBlobCandidates').size) return;
     const attachments = this.retainedAttachments();
     this.images.setDeletedBlobs(getPermanentDeletionBlobCandidates(this.vault.doc), new Set(attachments.map(image => image.hash)));
   }
 
   private scheduleImages() {
-    if (this.access !== 'ready') return;
+    if (this.access !== 'ready' || this.syncStopped) return;
     this.imagesDirty = true;
     clearTimeout(this.imageTimer);
     this.imageTimer = setTimeout(() => void this.syncImages(), 300);
   }
 
   private async syncImages() {
-    if (this.syncingImages || this.access !== 'ready') return;
+    if (this.syncingImages || this.access !== 'ready' || this.syncStopped) return;
     this.syncingImages = true;
     this.imagesDirty = false;
     try {
@@ -736,7 +771,7 @@ class StowStore {
       this.requireAccount();
       this.refresh();
     } catch (error) {
-      if (this.access !== 'ready') return;
+      if (this.access !== 'ready' || this.syncStopped) return;
       this.imageError = error instanceof Error ? error.message : 'Images will sync when the connection returns.';
       this.refresh();
       this.imageTimer = setTimeout(() => void this.syncImages(), 10000);

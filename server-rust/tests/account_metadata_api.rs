@@ -90,7 +90,7 @@ async fn sync_records_the_verified_owner_even_when_the_vault_format_cannot_open(
     let Err(tungstenite::Error::Http(response)) = Socket::query(
         &s,
         &auth("old-format-owner", Some(&id)),
-        &format!("schema={CURRENT_SCHEMA}&protocol=3&vaultId={id}"),
+        &format!("schema={CURRENT_SCHEMA}&protocol=4&vaultId={id}"),
     )
     .await
     else {
@@ -159,7 +159,7 @@ async fn rejected_requests_do_not_label_even_an_existing_unknown_vault() {
         Socket::query(
             &s,
             &h,
-            &format!("schema={CURRENT_SCHEMA}&protocol=3&vaultId={other}")
+            &format!("schema={CURRENT_SCHEMA}&protocol=4&vaultId={other}")
         )
         .await
         .is_err()

@@ -141,12 +141,24 @@ fn late_nested_text_to_collected_source_is_never_written_but_surviving_edit_is()
 }
 #[test]
 fn resolving_pending_dependencies_removes_private_payload_without_losing_live_edit() {
+    out_of_order_deletion(true);
+}
+#[test]
+fn out_of_order_independent_edit_erases_private_payload_without_losing_clock_gaps() {
+    out_of_order_deletion(false);
+}
+fn out_of_order_deletion(dependent_origin: bool) {
     let mut f = Fixture::new();
     note(&f.client, "a", "Original");
     note(&f.client, "b", "Keep");
     f.submit(1.).unwrap();
     let offline = clone_doc(&f.client).unwrap();
     let v = offline.transact().state_vector();
+    // Newer Yrs can integrate independent out-of-order records using Skip
+    // blocks. Exercise a real missing origin as well as that independent case.
+    if dependent_origin {
+        append(&offline, "a", "body", " missing origin");
+    }
     append(&offline, "b", "body", " this edit");
     let predecessor = diff(&offline, &v);
     let v = offline.transact().state_vector();
@@ -155,10 +167,21 @@ fn resolving_pending_dependencies_removes_private_payload_without_losing_live_ed
     tombstone(&f.client, "a");
     f.submit(2.).unwrap();
     f.vault.accept(&dependent, 3.).unwrap();
-    assert!(has_pending(&f.vault.validation.doc));
+    assert_eq!(has_pending(&f.vault.validation.doc), dependent_origin);
+    if !dependent_origin {
+        assert!(!contains(&encode(&f.vault.doc), "Unresolved-erased-secret"));
+    }
     f.vault.accept(&predecessor, 4.).unwrap();
     assert!(!has_pending(&f.vault.validation.doc));
-    assert!(names(&f.vault.update_dir).is_empty());
+    if dependent_origin {
+        assert!(names(&f.vault.update_dir).is_empty());
+    }
+    for file in names(&f.vault.update_dir) {
+        assert!(!contains(
+            &fs::read(f.vault.update_dir.join(file)).unwrap(),
+            "Unresolved-erased-secret"
+        ));
+    }
     assert!(!contains(
         &fs::read(&f.vault.snapshot_path).unwrap(),
         "Unresolved-erased-secret"

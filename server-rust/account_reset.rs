@@ -16,16 +16,15 @@ use std::{
 pub type Incarnations = BTreeMap<String, String>;
 pub fn load(directory: &Path) -> Result<Incarnations> {
     let Some(bytes) = read_optional(&directory.join("vault-incarnations.json"))? else {
-        match fs::read_dir(directory.join("reset-backups")) {
-            Ok(mut entries) => {
-                if entries.next().transpose()?.is_some() {
-                    return Err(Error::invalid(
-                        "vault-incarnations.json is missing from an installation with account reset backups. Restore it from backup to preserve account vault identities.",
-                    ));
-                }
-            }
-            Err(e) if e.kind() != std::io::ErrorKind::NotFound => return Err(e.into()),
-            _ => {}
+        let has_backup = match fs::read_dir(directory.join("reset-backups")) {
+            Ok(mut entries) => entries.next().transpose()?.is_some(),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => false,
+            Err(e) => return Err(e.into()),
+        };
+        if has_backup {
+            return Err(Error::invalid(
+                "vault-incarnations.json is missing from an installation with account reset backups. Restore it from backup to preserve account vault identities.",
+            ));
         }
         return Ok(Incarnations::new());
     };

@@ -30,6 +30,28 @@ function equalRoots(actual: Y.Doc, expected: Y.Doc) {
   }
 }
 
+test('conversion history accepts clients with only one or two metadata records', async t => {
+  for (const count of [1, 2]) await t.test(`${count} records`, () => {
+    const author = new Vault(), other = new Y.Doc();
+    try {
+      const id = author.createNote('text', { body: 'One\nTwo\nThree\nFour' });
+      Y.applyUpdate(other, Y.encodeStateAsUpdate(author.doc));
+      const note = other.getMap<Y.Map<any>>('notes').get(id)!;
+      note.set('color', 'sage');
+      if (count === 2) note.set('placement', { pinned: true, sortOrderDate: 1 });
+      Y.applyUpdate(author.doc, Y.encodeStateAsUpdate(other), 'remote');
+      author.convertBodyToChecklist(id);
+      const capture = () => nativeCommand({ op: 'projection', method: 'capture',
+        doc: Buffer.from(Y.encodeStateAsUpdate(author.doc)).toString('base64'), sourceIds: [id] });
+      assert.equal(author.getNote(id)!.body, '');
+      assert.equal(author.getItems(id).length, 4);
+      assert.deepEqual(capture(), author.captureHistoryState([id]));
+      author.setNoteText(id, 'body', 'Later edit'); author.finishEdit();
+      assert.deepEqual(capture(), author.captureHistoryState([id]));
+    } finally { author.destroy(); other.destroy(); }
+  });
+});
+
 test('Rust projection matches browser source, label, placement and merged text identities', async () => {
   const browser = new Vault();
   try {

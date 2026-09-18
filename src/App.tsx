@@ -315,6 +315,7 @@ export default function App() {
   const activeNote = editing?.noteId ? notes.find(note => note.id === editing.noteId || note.sourceIds.includes(editing.noteId!)) : undefined;
   const notify = useCallback((message: string) => setToast({ message, kind: 'error' }), []);
   const undoOrRedo = useCallback((kind: 'undo' | 'redo') => {
+    if (store.getSnapshot().syncRejection?.code === 'client_update_required') return;
     const description = store.vault[kind]();
     if (description) setToast({ message: `${kind === 'undo' ? 'Undid' : 'Redid'}: ${description}`, kind: 'history' });
   }, []);
@@ -376,13 +377,16 @@ export default function App() {
   useEffect(() => { if (error) notify(error); }, [error, notify]);
   useEffect(() => { if (access === 'locked' || access === 'blocked') { setEditing(null); setDeletion(null); setStorageSettings(false); } }, [access, setEditing]);
   useEffect(() => {
+    if (syncRejection?.code === 'client_update_required') { setDeletion(null); setStorageSettings(false); }
+  }, [syncRejection]);
+  useEffect(() => {
     if (access === 'ready' && ready && editing?.noteId && !activeNote && !editing.newNote) setEditing(null);
   }, [access, ready, editing, activeNote, setEditing]);
   useEffect(() => { if (access !== 'ready') setToast(previous => previous?.kind !== 'error' ? null : previous); }, [access]);
   useEffect(() => { if (IS_DEMO) return; try { localStorage.setItem('stow-list-view', String(listView)); } catch { /* Account bootstrap reports unavailable browser storage. */ } }, [listView]);
   useEffect(() => {
     const keys = (event: globalThis.KeyboardEvent) => {
-      if (access !== 'ready' || deletion || storageSettings) return;
+      if (access !== 'ready' || syncRejection?.code === 'client_update_required' || deletion || storageSettings) return;
       const target = event.target as HTMLElement;
       const input = target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable;
       if (!input && event.key === '/' && !editing) { event.preventDefault(); searchRef.current?.focus(); }
@@ -398,7 +402,7 @@ export default function App() {
       if (event.key === 'Escape' && !editing) { setSelected(new Set()); setSettings(false); if (search) setSearch(''); }
     };
     document.addEventListener('keydown', keys); return () => document.removeEventListener('keydown', keys);
-  }, [editing, search, access, undoOrRedo, selectedNotes.length, copySelected, deletion, storageSettings]);
+  }, [editing, search, access, syncRejection, undoOrRedo, selectedNotes.length, copySelected, deletion, storageSettings]);
   useDismissiblePopup(settings, settingsRef, restoreFocus => {
     setSettings(false);
     if (restoreFocus) settingsRef.current?.querySelector<HTMLButtonElement>('button')?.focus({ preventScroll: true });
@@ -418,7 +422,7 @@ export default function App() {
   const nav = [{ id: 'notes' as View, label: 'Notes', icon: Logo }, { id: 'archive' as View, label: 'Archive', icon: Archive }, { id: 'trash' as View, label: 'Trash', icon: Trash2 }];
   const imageStatus = images.pendingUploads ? `Uploading ${images.pendingUploads} image${images.pendingUploads === 1 ? '' : 's'}…` : images.thumbnailsRemaining ? `Saving ${images.thumbnailsRemaining} image previews for offline use…` : null;
   const syncLabel = error || syncRejection?.message || (status === 'demo' ? 'Demo — not saved or synchronized' : localPending > 0 ? 'Saving on this device…' : status === 'online' ? pending ? 'Syncing…' : imageStatus || 'Connected' : status === 'connecting' ? 'Connecting…' : status === 'locked' ? 'Locked' : status === 'error' ? 'Could not sync' : 'Offline — notes stored on this device');
-  return <div className={`app ${sidebar ? 'sidebar-open' : 'sidebar-closed'}`}>
+  return <><div className={`app ${sidebar ? 'sidebar-open' : 'sidebar-closed'}`} inert={syncRejection?.code === 'client_update_required'}>
     <header className={`topbar ${selected.size ? 'selection-topbar' : ''}`}>
       {selected.size ? <><IconButton label="Clear selection" onClick={() => setSelected(new Set())}><X size={24} /></IconButton><span className="selection-count">{selected.size}<span className="selection-count-word"> selected</span></span><div className="selection-actions"><IconButton label="Copy selected notes" title={`Copy selected notes (${macShortcuts ? 'Cmd+C' : 'Ctrl+C'})`} aria-keyshortcuts={macShortcuts ? "Meta+c" : "Control+c"} onClick={() => void copySelected()}><Copy size={21} /></IconButton><SelectionExport onExport={exportSelected} />{selected.size > 1 && view !== 'trash' && <button className="merge-button" aria-label="Merge notes" onClick={() => { const id = store.vault.mergeNotes([...selected]); setSelected(new Set()); openNote(id); }}><Merge size={19} /><span>Merge notes</span></button>}{selectedNotes.every(note => note.trashed) ? <><IconButton label="Restore selected notes" onClick={() => bulk({ trashed: false })}><RotateCcw size={22} /></IconButton><IconButton label="Delete forever" onClick={() => setDeletion({ sourceIds: selectedNotes.flatMap(note => note.sourceIds), titles: selectedNotes.map(note => note.title), emptyTrash: false })}><Trash2 size={22} /></IconButton></> : <><IconButton label="Pin selected notes" onClick={() => bulk({ pinned: true })}><Pin size={21} /></IconButton><IconButton label={view === 'archive' ? 'Unarchive selected notes' : 'Archive selected notes'} onClick={() => bulk({ archived: view !== 'archive' })}><Archive size={21} /></IconButton><IconButton label="Trash selected notes" onClick={() => bulk({ trashed: true })}><Trash2 size={21} /></IconButton></>}</div></> : <>
         <div className="brand-group"><IconButton label={sidebar ? 'Close navigation' : 'Open navigation'} onClick={() => setSidebar(!sidebar)}><Menu size={23} /></IconButton><button className="brand" onClick={() => navigate('notes')} aria-label="Stow home"><span className="brand-mark"><Logo size={26} strokeWidth={2.3} /></span><span>Stow</span></button></div>
@@ -454,7 +458,6 @@ export default function App() {
       onRestore={id => { setSelectedLabel(null); setView('notes'); setSearch(''); openNote(id); }} />}
     {deletion && <DeleteNotesDialog deletion={deletion} onDelete={deleteForever} onClose={closeDeletion} />}
     {storageSettings && <StorageSettings onClose={() => setStorageSettings(false)} />}
-    <ServerNotice />
     {toast && !syncRejection && <Toast message={toast.message} onDismiss={() => setToast(null)} />}
-  </div>;
+  </div><ServerNotice /></>;
 }

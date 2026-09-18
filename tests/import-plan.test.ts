@@ -70,7 +70,7 @@ async function fixture(t: TestContext) {
   return {
     owner, oldId, input, backups, blobDir, client, directory,
     async captureHistory(noteId: string) {
-      const socket = new WebSocket(`${url.replace('http:', 'ws:')}/sync?schema=${CURRENT_SCHEMA}&protocol=3&vaultId=${owner.account.vaultId}`, {
+      const socket = new WebSocket(`${url.replace('http:', 'ws:')}/sync?schema=${CURRENT_SCHEMA}&protocol=4&vaultId=${owner.account.vaultId}`, {
         headers: { 'X-Auth-User': owner.account.user, 'X-Stow-Proxy-Secret': proof },
       });
       const transfer = new SyncTransfer(socket, { onMessage() {}, onFailure() {} });

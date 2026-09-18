@@ -1,6 +1,7 @@
 import { openDB, type DBSchema, type IDBPDatabase } from 'idb';
 import type { PendingEdit } from './history-types';
 import type { SavedUndo } from './persistent-undo';
+import { SYNC_PROTOCOL_VERSION } from './protocol-version';
 
 export interface PersistenceDatabase extends DBSchema {
   updates: { key: number; value: Uint8Array };
@@ -9,12 +10,16 @@ export interface PersistenceDatabase extends DBSchema {
   undo: { key: string; value: SavedUndo };
 }
 export type PersistenceConnection = IDBPDatabase<PersistenceDatabase>;
-export const PERSISTENCE_VERSION = 2;
+export const PERSISTENCE_VERSION = Number(SYNC_PROTOCOL_VERSION);
+export class StorageUpdateRequired extends Error {
+  constructor(readonly version?: number) { super('Another version of Stow has upgraded this account’s local storage. Reload Stow to continue. Your saved edits will be kept.'); }
+}
 const schemaError = () => new Error('This browser has an older Stow storage format. Clear this account’s local cache before opening a freshly imported vault.');
 
-/** The current-only v1 cache gains local Undo storage without changing its data.
+/** Upgrade this account's existing cache in place. The compatibility epoch also
+ * fences older connections; ordinary releases keep the same database version.
  * Earlier replicated-history caches remain incompatible. */
-export async function openPersistenceDatabase(name: string, blocking?: () => void, terminated?: () => void) {
+export async function openPersistenceDatabase(name: string, blocking?: (version: number) => void, terminated?: () => void) {
   let incompatible = false;
   try {
     const db = await openDB<PersistenceDatabase>(name, PERSISTENCE_VERSION, {
@@ -23,15 +28,18 @@ export async function openPersistenceDatabase(name: string, blocking?: () => voi
           db.createObjectStore('updates', { autoIncrement: true });
           db.createObjectStore('pendingEdits');
           db.createObjectStore('maintenance');
-        } else if (db.objectStoreNames.length !== 3 || !(['updates', 'pendingEdits', 'maintenance'] as const).every(name => db.objectStoreNames.contains(name))) {
+        } else if (db.objectStoreNames.length !== (oldVersion === 1 ? 3 : 4) || !(['updates', 'pendingEdits', 'maintenance'] as const).every(name => db.objectStoreNames.contains(name)) || (oldVersion > 1 && !db.objectStoreNames.contains('undo'))) {
           incompatible = true; void transaction.done.catch(() => {}); transaction.abort(); return;
         }
-        db.createObjectStore('undo');
-      }, blocking, terminated,
+        if (oldVersion < 2) db.createObjectStore('undo');
+      }, blocking(_oldVersion, newVersion) { blocking?.(newVersion ?? PERSISTENCE_VERSION + 1); }, terminated,
     });
     if (db.objectStoreNames.length !== 4 || !(['updates', 'pendingEdits', 'maintenance', 'undo'] as const).every(name => db.objectStoreNames.contains(name))) {
       db.close(); throw schemaError();
     }
     return db;
-  } catch (error) { throw incompatible || (error instanceof Error && error.name === 'VersionError') ? schemaError() : error; }
+  } catch (error) {
+    if (error instanceof Error && error.name === 'VersionError') throw new StorageUpdateRequired();
+    throw incompatible ? schemaError() : error;
+  }
 }

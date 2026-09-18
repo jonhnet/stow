@@ -255,10 +255,51 @@ impl Client {
 }
 struct Account {
     vault: Vault,
+    directory: std::path::PathBuf,
+    recovery_required: bool,
     clients: BTreeMap<u64, Client>,
     slots: Arc<tokio::sync::Semaphore>,
 }
+
 impl Account {
+    fn recover(&mut self, time: f64) -> Result<()> {
+        if self.recovery_required {
+            self.vault = Vault::open(&self.directory, time)?;
+            self.recovery_required = false;
+        }
+        Ok(())
+    }
+    // Catch while the account guard is still held. A panicked operation may
+    // have changed either CRDT replica or history indexes; reopen all of them
+    // from durable files before admitting another operation.
+    fn run<T>(&mut self, time: f64, operation: impl FnOnce(&mut Self) -> Result<T>) -> Result<T> {
+        use std::panic::{AssertUnwindSafe, catch_unwind};
+        let result = catch_unwind(AssertUnwindSafe(|| {
+            self.recover(time)?;
+            operation(self)
+        }));
+        match result {
+            Ok(result) => result,
+            Err(_) => {
+                self.recovery_required = true;
+                // Failed recovery leaves the flag set. Future requests retry
+                // opening durable state and never use the damaged instance.
+                if !matches!(
+                    catch_unwind(AssertUnwindSafe(|| self.recover(time))),
+                    Ok(Ok(()))
+                ) {
+                    return Err(Error::request(
+                        503,
+                        "Vault recovery failed. Saved data remains on disk; reconnect to retry.",
+                    ));
+                }
+                Err(Error::request(
+                    503,
+                    "Vault operation panicked. The vault was reopened from saved data.",
+                ))
+            }
+        }
+    }
     fn notice(&self, message: Value) {
         for c in self.clients.values() {
             c.notice(message.clone());
@@ -287,6 +328,15 @@ pub struct ServerState {
     maintenance: tokio::sync::Mutex<()>,
 }
 impl ServerState {
+    #[cfg(test)]
+    pub(crate) async fn inject_history_panic(self: &Arc<Self>, id: String) {
+        self.with_account(id, |account| {
+            account.vault.history.faults.insert("panicCapture".into());
+            Ok(())
+        })
+        .await
+        .unwrap();
+    }
     fn time(&self) -> f64 {
         self.config.fixed_now.unwrap_or_else(now)
     }
@@ -424,6 +474,8 @@ impl ServerState {
             let directory = self.account_directory(id);
             Ok(Account {
                 vault: Vault::open(&directory, self.time())?,
+                directory,
+                recovery_required: false,
                 clients: BTreeMap::new(),
                 slots: Arc::new(tokio::sync::Semaphore::new(16)),
             })
@@ -440,7 +492,7 @@ impl ServerState {
             let mut account = account
                 .lock()
                 .map_err(|_| Error::invalid("Vault unavailable"))?;
-            operation(&mut account)
+            account.run(state.time(), operation)
         })
         .await
         .map_err(|e| Error::invalid(format!("Vault worker failed: {e}")))?
@@ -456,7 +508,7 @@ impl ServerState {
             let mut account = account
                 .lock()
                 .map_err(|_| Error::invalid("Vault unavailable"))?;
-            operation(&mut account)
+            account.run(state.time(), operation)
         })
         .await
         .map_err(|e| Error::invalid(format!("Vault worker failed: {e}")))?
@@ -651,7 +703,7 @@ fn json_response(status: u16, value: Value) -> Response {
         .into_response()
 }
 
-const SYNC_PROTOCOL: &str = "3";
+pub(crate) const SYNC_PROTOCOL: &str = "4";
 
 fn client_update_required() -> Value {
     json!({
@@ -1303,7 +1355,8 @@ async fn process_unit(
         let mut catchup = catchup;
         let mut completed = completed;
         let capture = |account: &mut Account, boundary: &Value| {
-            let result = account.vault.capture_history(boundary, time).and_then(|ids| {
+            let result = account.run(time, |account| {
+                let ids = account.vault.capture_history(boundary, time)?;
                 account.vault.cleanup_history_blobs()?;
                 Ok(ids)
             });
@@ -1314,8 +1367,10 @@ async fn process_unit(
                     }
                 }
                 Err(e) => {
-                    account.vault.history_error = Some(e.to_string());
-                    account.vault.history_capture_failures.extend(strings(&boundary["sourceIds"]));
+                    if !account.recovery_required {
+                        account.vault.history_error = Some(e.to_string());
+                        account.vault.history_capture_failures.extend(strings(&boundary["sourceIds"]));
+                    }
                     client.notice(json!({"type":"history-failure","message":format!("Current notes are saved, but history could not be recorded: {e}")}));
                 }
             }
@@ -1365,6 +1420,11 @@ async fn process_unit(
 
 fn application_failure(error: Error) -> transfer::Failure {
     match error {
+        Error::Request {
+            status: 503,
+            message,
+            ..
+        } => transfer::Failure::new("retry", message),
         Error::Io(_) => transfer::Failure::new(
             "storage",
             "Storage unavailable; changes remain on this device. Reconnect to retry.",
@@ -1447,4 +1507,59 @@ async fn connection(state: Arc<ServerState>, vault_id: String, mut socket: WebSo
             Ok(())
         })
         .await;
+}
+
+#[cfg(test)]
+mod recovery_tests {
+    use super::*;
+    use yrs::Transact;
+
+    #[test]
+    fn failed_reopen_never_exposes_panicked_memory_and_retries_after_disk_repair() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut account = Account {
+            vault: Vault::open(directory.path(), 0.).unwrap(),
+            directory: directory.path().into(),
+            recovery_required: false,
+            clients: BTreeMap::new(),
+            slots: Arc::new(tokio::sync::Semaphore::new(16)),
+        };
+        let saved = crate::crdt::encode(&account.vault.doc);
+        let snapshot = account.vault.snapshot_path.clone();
+        // A subsequent read fails even though the cached account is still open.
+        std::fs::write(&snapshot, [255]).unwrap();
+        let result: Result<()> = account.run(1., |account| {
+            crate::crdt::put(
+                &mut account.vault.doc.transact_mut(),
+                "notes",
+                "panic-only",
+                json!({"body":"Not durable"}),
+            );
+            panic!("Injected account panic");
+        });
+        assert!(matches!(result, Err(Error::Request { status: 503, .. })));
+        let mut accessed = false;
+        assert!(
+            account
+                .run(2., |_| {
+                    accessed = true;
+                    Ok(())
+                })
+                .is_err()
+        );
+        assert!(
+            !accessed,
+            "A failed reopen must not admit operations on damaged memory"
+        );
+        std::fs::write(&snapshot, saved).unwrap();
+        account
+            .run(3., |account| {
+                assert!(
+                    crate::crdt::get(&account.vault.doc.transact(), "notes", "panic-only")
+                        .is_null()
+                );
+                Ok(())
+            })
+            .unwrap();
+    }
 }

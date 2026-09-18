@@ -1,5 +1,9 @@
 import * as Y from 'yjs';
 import { isEmptyUpdate } from './yjs-updates';
+import { CURRENT_SCHEMA } from './current-schema';
+import { SYNC_PROTOCOL_VERSION } from './protocol-version';
+
+export const tabChannelName = (vaultId: string) => `stow-vault-${vaultId}-${CURRENT_SCHEMA}-${SYNC_PROTOCOL_VERSION}`;
 
 interface Hello {
   type: 'hello';
@@ -25,13 +29,7 @@ export class TabSync {
       return;
     }
     if (!message || typeof message !== 'object' || !('type' in message) || message.type !== 'hello') return;
-    // Tabs already open on the previous build send a bare hello and understand
-    // binary updates. Keep that exchange working across a development reload.
-    if (!('vector' in message)) {
-      this.sendDifference();
-      return;
-    }
-    if (!(message.vector instanceof Uint8Array) || !('from' in message) || typeof message.from !== 'string') {
+    if (!('vector' in message) || !(message.vector instanceof Uint8Array) || !('from' in message) || typeof message.from !== 'string') {
       throw new Error('Invalid tab state vector.');
     }
     if (message.from === this.id || ('to' in message && message.to !== this.id)) return;

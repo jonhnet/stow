@@ -81,5 +81,5 @@ export async function writePersistenceBatch(db: PersistenceConnection, request: 
     await done.catch(() => {}); throw error;
   }
 }
-/** Explicit executor for process-local IndexedDB tests; browsers always use a worker. */
+/** Also used to drain an existing browser connection during an exclusive upgrade. */
 export const inlinePersistenceWriter: PersistenceWriter = { write: writePersistenceBatch, close() {} };

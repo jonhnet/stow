@@ -17,6 +17,9 @@ export function useEditBoundaries(container: RefObject<HTMLElement | null>, onUn
     const element = container.current!;
     const vault = store.vault;
     const beforeInput = (event: InputEvent) => {
+      if (store.getSnapshot().syncRejection?.code === 'client_update_required') {
+        event.preventDefault(); event.stopPropagation(); return;
+      }
       if (!isNoteField(event.target) || event.defaultPrevented || event.isComposing) return;
       if (event.inputType === 'historyUndo' || event.inputType === 'historyRedo') {
         // Android's native editing menu has no keyboard event. Route it through
