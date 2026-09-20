@@ -79,7 +79,10 @@ try {
     await field.fill('Saved before update');
     await page.getByRole('button', { name: 'Close', exact: true }).click();
     // A separate online replica proves that this edit reached the server.
-    await other.getByRole('article', { name: 'Open note: Home setup test', exact: true }).waitFor();
+    const verifiedNote = other.getByRole('article', { name: 'Open note: Home setup test', exact: true });
+    // The title/card can arrive before the body edit. Establish the complete
+    // server checkpoint before disconnecting the writer.
+    await waitFor(() => verifiedNote.textContent().then(value => value.includes('Saved before update')), 'Initial note body did not reach the verifier');
     await context.setOffline(true);
     await edit('Offline edit survives the server update');
     await page.reload();
@@ -88,7 +91,9 @@ try {
     // or let the pending edit appear on the server before reconnection.
     await other.reload();
     await connected(other);
-    const saved = await other.getByRole('article', { name: 'Open note: Home setup test', exact: true }).textContent();
+    // Connected describes transport state, not completion of React rendering.
+    await waitFor(() => verifiedNote.textContent().then(value => value.includes('Saved before update')), 'Verifier did not render the saved server checkpoint after reload');
+    const saved = await verifiedNote.textContent();
     assert(saved.includes('Saved before update'));
     assert(!saved.includes('Offline edit survives'));
   } else {
