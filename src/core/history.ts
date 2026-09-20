@@ -1,7 +1,6 @@
 import type { HistoryPatch, HistorySource, HistoryState, SourceField } from './history-types';
 import { textSplice } from './text-splice';
 
-const fields: SourceField[] = ['kind', 'color', 'pinned', 'archived', 'trashed', 'createdAt', 'sortOrderDate', 'updatedAt'];
 function sourceSet<K extends SourceField>(sourceId: string, field: K, value: NonNullable<HistorySource[K]>): Extract<HistoryPatch, { op: 'set' }> {
   // Both arguments come from the same indexed source field. TypeScript cannot
   // distribute a generic key into the mapped union returned here.
@@ -9,21 +8,32 @@ function sourceSet<K extends SourceField>(sourceId: string, field: K, value: Non
 }
 const ids = (a: object, b: object) => [...new Set([...Object.keys(a), ...Object.keys(b)])].sort();
 
-export function diffHistory(before: HistoryState, after: HistoryState): HistoryPatch[] {
-  const patches: HistoryPatch[] = [];
-  for (const sourceId of ids(before.sources, after.sources)) {
-    const a = before.sources[sourceId], b = after.sources[sourceId];
-    if (!a || !b) { patches.push({ op: 'source', sourceId, value: b ?? null }); continue; }
+type SourceDiff = (sourceId: string, a: HistorySource, b: HistorySource, patches: HistoryPatch[]) => void;
+const scalar = (field: SourceField): SourceDiff => (sourceId, a, b, patches) => {
+  const old = field === 'sortOrderDate' ? a.sortOrderDate ?? a.createdAt : a[field];
+  const value = field === 'sortOrderDate' ? b.sortOrderDate ?? b.createdAt : b[field];
+  if (old !== value) patches.push(sourceSet(sourceId, field, value!));
+};
+const text = (field: 'title' | 'body'): SourceDiff => (sourceId, a, b, patches) => {
+  if (a[field] !== b[field]) patches.push({ op: 'text', sourceId, field, ...textSplice(a[field], b[field]) });
+};
+const labels: SourceDiff = (sourceId, a, b, patches) => {
+  if (JSON.stringify(a.labels ?? []) !== JSON.stringify(b.labels ?? []) || JSON.stringify(a.labelGenerations ?? {}) !== JSON.stringify(b.labelGenerations ?? {})) {
+    patches.push({ op: 'labels', sourceId, value: b.labels ?? [], ...(b.labelGenerations ? { generations: b.labelGenerations } : {}) });
+  }
+};
+/** A new source field must declare its history behavior before it can compile.
+ * Related fields can share one handler; execute it only once per source. */
+const sourceHandlers = {
+  unifiedChecklist: (sourceId, a, b, patches) => {
     if (a.unifiedChecklist !== b.unifiedChecklist) patches.push({ op: 'checklist-mode', sourceId, value: b.unifiedChecklist ?? null });
-    for (const field of ['title', 'body'] as const) if (a[field] !== b[field]) patches.push({ op: 'text', sourceId, field, ...textSplice(a[field], b[field]) });
-    for (const field of fields) {
-      const old = field === 'sortOrderDate' ? a.sortOrderDate ?? a.createdAt : a[field];
-      const value = field === 'sortOrderDate' ? b.sortOrderDate ?? b.createdAt : b[field];
-      if (old !== value) patches.push(sourceSet(sourceId, field, value!));
-    }
-    if (JSON.stringify(a.labels ?? []) !== JSON.stringify(b.labels ?? []) || JSON.stringify(a.labelGenerations ?? {}) !== JSON.stringify(b.labelGenerations ?? {})) {
-      patches.push({ op: 'labels', sourceId, value: b.labels ?? [], ...(b.labelGenerations ? { generations: b.labelGenerations } : {}) });
-    }
+  },
+  title: text('title'), body: text('body'),
+  kind: scalar('kind'), color: scalar('color'), pinned: scalar('pinned'),
+  archived: scalar('archived'), trashed: scalar('trashed'), createdAt: scalar('createdAt'),
+  sortOrderDate: scalar('sortOrderDate'), updatedAt: scalar('updatedAt'),
+  labels, labelGenerations: labels,
+  items: (sourceId, a, b, patches) => {
     for (const itemId of ids(a.items, b.items)) {
       const old = a.items[itemId], current = b.items[itemId];
       if (!old || !current) { patches.push({ op: 'item', sourceId, itemId, value: current ?? null }); continue; }
@@ -32,9 +42,24 @@ export function diffHistory(before: HistoryState, after: HistoryState): HistoryP
       if (old.rank !== current.rank) patches.push({ op: 'item-set', sourceId, itemId, field: 'rank', value: current.rank });
       if (old.parentId !== current.parentId) patches.push({ op: 'item-parent', sourceId, itemId, value: current.parentId ?? null });
     }
+  },
+  images: (sourceId, a, b, patches) => {
     for (const attachmentId of ids(a.images, b.images)) if (JSON.stringify(a.images[attachmentId]) !== JSON.stringify(b.images[attachmentId])) {
       patches.push({ op: 'image', sourceId, attachmentId, value: b.images[attachmentId] ?? null });
     }
+  },
+} satisfies Record<keyof HistorySource, SourceDiff>;
+const diffSource = [...new Set(Object.values(sourceHandlers))];
+function unsupportedPatch(_patch: never): never {
+  throw new Error('This history entry contains an unsupported change.');
+}
+
+export function diffHistory(before: HistoryState, after: HistoryState): HistoryPatch[] {
+  const patches: HistoryPatch[] = [];
+  for (const sourceId of ids(before.sources, after.sources)) {
+    const a = before.sources[sourceId], b = after.sources[sourceId];
+    if (!a || !b) { patches.push({ op: 'source', sourceId, value: b ?? null }); continue; }
+    for (const diff of diffSource) diff(sourceId, a, b, patches);
   }
   if (JSON.stringify(before.groups) !== JSON.stringify(after.groups)) patches.push({ op: 'groups', value: after.groups });
   for (const recipeId of ids(before.recipes ?? {}, after.recipes ?? {})) if (JSON.stringify(before.recipes?.[recipeId]) !== JSON.stringify(after.recipes?.[recipeId])) {
@@ -123,6 +148,7 @@ export function applyHistory(base: HistoryState, patches: HistoryPatch[]): Histo
         if (patch.generations) source.labelGenerations = patch.generations;
         else delete source.labelGenerations;
         break;
+      default: unsupportedPatch(patch);
     }
   }
   if (copiedJoins && !Object.keys(state.joins!).length) delete state.joins;
