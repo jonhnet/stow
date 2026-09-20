@@ -161,30 +161,11 @@ fn converted_items(items: Vec<(String, Value)>) -> Vec<(String, Value)> {
 pub fn groups(doc: &Doc) -> Vec<Vec<String>> {
     let tx = doc.transact();
     let ids = keys(&tx, "notes");
-    let mut parents: BTreeMap<String, String> = ids
-        .union(&keys(&tx, "deletedNotes"))
-        .map(|s| (s.clone(), s.clone()))
-        .collect();
-    fn find(p: &BTreeMap<String, String>, id: &str) -> String {
-        let mut id = id;
-        while let Some(next) = p.get(id) {
-            if next == id {
-                break;
-            }
-            id = next;
-        }
-        id.into()
-    }
-    for (_, edge) in entries(&tx, "merges", None) {
-        let a = string(&edge["a"]);
-        let b = string(&edge["b"]);
-        if parents.contains_key(a) && parents.contains_key(b) {
-            parents.insert(find(&parents, b), find(&parents, a));
-        }
-    }
+    let deleted = keys(&tx, "deletedNotes");
+    let parents = crate::components::roots(&tx, &ids, &deleted);
     let mut grouped = BTreeMap::<String, Vec<String>>::new();
     for id in ids {
-        grouped.entry(find(&parents, &id)).or_default().push(id);
+        grouped.entry(parents[&id].clone()).or_default().push(id);
     }
     let compare = |a: &String, b: &String| {
         number(&field(&tx, "notes", a, "createdAt"))

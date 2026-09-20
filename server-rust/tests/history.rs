@@ -441,3 +441,46 @@ fn history_ownership_tracks_moves_replacements_deletion_and_restart() {
     f.submit(7.).unwrap();
     assert_eq!(capture(&f, "a")["sources"]["a"]["items"], json!({}));
 }
+
+#[test]
+fn shared_components_preserve_visible_order_and_retention_through_deleted_bridges() {
+    let doc = new_doc();
+    for (id, created) in [("z", 1), ("bridge", 0), ("a", 2)] {
+        note(&doc, id, id);
+        meta(&doc, id, "createdAt", json!(created));
+        meta(&doc, id, "archived", json!(true));
+    }
+    put(
+        &mut doc.transact_mut(),
+        "merges",
+        "left",
+        json!({"a":"z","b":"bridge"}),
+    );
+    put(
+        &mut doc.transact_mut(),
+        "merges",
+        "right",
+        json!({"a":"bridge","b":"a"}),
+    );
+    tombstone(&doc, "bridge");
+    remove(&mut doc.transact_mut(), "notes", "bridge");
+    assert_eq!(history_state::groups(&doc), vec![ids(&["z", "a"])]);
+    assert_eq!(
+        crate::retention::archived_groups(&doc),
+        vec![ids(&["a", "z"])]
+    );
+    meta(&doc, "a", "archived", json!(false));
+    assert!(crate::retention::archived_groups(&doc).is_empty());
+    meta(&doc, "a", "archived", json!(true));
+    meta(&doc, "a", "trashed", json!(true));
+    meta(&doc, "z", "trashed", json!(true));
+    assert!(crate::retention::archived_groups(&doc).is_empty());
+    meta(&doc, "z", "trashed", json!(false));
+    assert_eq!(
+        crate::retention::archived_groups(&doc),
+        vec![ids(&["a", "z"])]
+    );
+    remove(&mut doc.transact_mut(), "merges", "left");
+    assert_eq!(history_state::groups(&doc), vec![ids(&["z"]), ids(&["a"])]);
+    assert_eq!(crate::retention::archived_groups(&doc), vec![ids(&["z"])]);
+}

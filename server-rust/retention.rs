@@ -51,34 +51,13 @@ pub fn archived_groups(doc: &yrs::Doc) -> Vec<Vec<String>> {
     let tx = doc.transact();
     let notes = root(&tx, "notes");
     let deleted = keys(&tx, "deletedNotes");
-    let mut parents: BTreeMap<String, String> = keys(&tx, "notes")
-        .union(&deleted)
-        .map(|s| (s.clone(), s.clone()))
-        .collect();
-    fn root_id(parents: &BTreeMap<String, String>, id: &str) -> String {
-        let mut id = id;
-        while let Some(next) = parents.get(id) {
-            if next == id {
-                break;
-            }
-            id = next;
-        }
-        id.into()
-    }
-    for (_, edge) in entries(&tx, "merges", None) {
-        let a = string(&edge["a"]);
-        let b = string(&edge["b"]);
-        if parents.contains_key(a) && parents.contains_key(b) {
-            let a = root_id(&parents, a);
-            let b = root_id(&parents, b);
-            parents.insert(b, a);
-        }
-    }
+    let ids = keys(&tx, "notes");
+    let parents = crate::components::roots(&tx, &ids, &deleted);
     let mut groups = BTreeMap::<String, Vec<String>>::new();
     for (id, note) in notes.iter(&tx) {
         if matches!(note, Out::YMap(_)) && !deleted.contains(id) {
             groups
-                .entry(root_id(&parents, id))
+                .entry(parents[id].clone())
                 .or_default()
                 .push(id.into());
         }

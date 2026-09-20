@@ -30,3 +30,5 @@ pub mod admin;
 mod cli;
 
 mod ownership;
+
+mod components;
