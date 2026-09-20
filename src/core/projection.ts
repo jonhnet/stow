@@ -8,6 +8,7 @@ import { notePlacement } from './note-order';
 import { composeText, materializeNote, type MergeRecipe } from './merged-text';
 import { coalesceConversions, type ConversionItem } from './converted-checklist';
 import { visibleText } from './converted-text';
+import { readChecklistItem } from './checklist-record';
 
 type RecordMap = Y.Map<any>;
 type SourceView = SourceNote;
@@ -140,10 +141,8 @@ export class VaultProjection {
       const cached = this.itemRecords.get(itemId);
       if (cached) { result.push(cached); continue; }
       const item = this.items.get(itemId);
-      if (item && item.get('text')) {
-        const view = { id: itemId, noteId: item.get('noteId'), text: item.get('text').toString(), checked: !!item.get('checked'), deleted: !!item.get('deleted'), conversion: item.get('conversion'), rank: Number(item.get('rank')) || 0, ...(typeof item.get('parentId') === 'string' && item.get('parentId') ? { parentId: item.get('parentId') } : {}) };
-        this.itemRecords.set(itemId, view); result.push(view);
-      }
+      const view = item && readChecklistItem(itemId, item);
+      if (view) { this.itemRecords.set(itemId, view); result.push(view); }
     }
     const ordered = orderChecklistItems(coalesceConversions(result).filter(item => item.noteId === id));
     this.itemViews.set(id, ordered); return ordered;
