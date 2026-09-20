@@ -276,7 +276,12 @@ function EditorChecklist({ note, disabled, onAddItem }: { note: Note; disabled: 
     textKey(event, item, root) {
         if (event.nativeEvent.isComposing) return;
         if (event.key === 'Tab' && !event.ctrlKey && !event.metaKey && !event.altKey && indent(item, event.shiftKey)) { event.preventDefault(); event.stopPropagation(); }
-        if (event.key === 'Enter' && !event.shiftKey && !event.ctrlKey && !event.metaKey) { event.preventDefault(); setFocusRequest({ id: store.vault.addItemAfter(note.id, item.id), kind: 'text' }); }
+        if (event.key === 'Enter' && !event.shiftKey && !event.ctrlKey && !event.metaKey) {
+          event.preventDefault();
+          const field = event.currentTarget as HTMLTextAreaElement;
+          const id = store.vault.splitItem(note.id, item.id, field.selectionStart, field.selectionEnd);
+          setFocusRequest({ id, kind: 'text', selection: { start: 0, end: 0, direction: 'none' } });
+        }
         if (event.key === 'Backspace' && !item.text) {
           event.preventDefault();
           const families = active.some(group => group.root.id === root.id) ? active : completed;

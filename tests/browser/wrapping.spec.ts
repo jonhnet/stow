@@ -131,3 +131,32 @@ test('Enter creates and focuses one new item; IME confirmation does not create a
   await expect(dialog.locator('[data-check-row]')).toHaveCount(2);
   await expect(second).toBeFocused();
 });
+
+for (const [start, end, before, after] of [
+  [5, 5, 'Alpha', ' Beta'],
+  [0, 0, '', 'Alpha Beta'],
+  [5, 6, 'Alpha', 'Beta'],
+] as const) test(`Enter splits checklist text at selection ${start}:${end} and undo restores it`, async ({ page }) => {
+  const card = await createList(page, `Split checklist row ${start}:${end}`, 'Alpha Beta');
+  await card.click();
+  const dialog = page.getByRole('dialog');
+  const rows = dialog.locator('[data-check-row]');
+  const first = rows.first().getByRole('textbox', { name: 'List item text', exact: true });
+  await first.focus();
+  const id = await first.getAttribute('data-item-id');
+  await first.evaluate((element: HTMLTextAreaElement, range) => element.setSelectionRange(...range), [start, end] as [number, number]);
+  await first.press('Enter');
+  await expect(rows).toHaveCount(2);
+  await expect(first).toHaveText(before);
+  await expect(first).toHaveAttribute('data-item-id', id!);
+  const second = rows.nth(1).getByRole('textbox', { name: 'List item text', exact: true });
+  await expect(second).toHaveValue(after);
+  await expect(second).toBeFocused();
+  expect(await second.evaluate((element: HTMLTextAreaElement) => element.selectionStart)).toBe(0);
+  await page.keyboard.press('Control+z');
+  await expect(rows).toHaveCount(1);
+  await expect(first).toHaveText('Alpha Beta');
+  await page.keyboard.press('Control+Shift+z');
+  await expect(rows).toHaveCount(2);
+  await expect(second).toHaveText(after);
+});

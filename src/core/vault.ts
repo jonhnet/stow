@@ -690,7 +690,14 @@ export class Vault {
     const noteId = item.get('noteId');
     this.change([noteId], { type: 'text', noteId, itemId: id, field: 'text' }, 'Edited checklist text', () => { updateText(item.get('text'), value); this.projection.itemChanged(id); this.touch(noteId); }, false);
   }
+  splitItem(noteId: string, itemId: string, start: number, end = start): string {
+    const text = this.items.get(itemId)!.get('text').toString();
+    return this.insertItemAfter(noteId, itemId, text.slice(end), text.slice(0, start));
+  }
   addItemAfter(noteId: string, afterItemId: string, text = ''): string {
+    return this.insertItemAfter(noteId, afterItemId, text);
+  }
+  private insertItemAfter(noteId: string, afterItemId: string, text: string, remainingText?: string): string {
     const id = uid(); if (!this.notes.has(noteId)) return id;
     const groups = checklistGroups(this.getItems(noteId));
     const group = groups.find(group => group.root.id === afterItemId || group.children.some(item => item.id === afterItemId));
@@ -701,6 +708,10 @@ export class Vault {
     const insertAt = firstChild ? 0 : index < 0 ? siblings.length : index + 1;
     this.change([noteId], { type: 'item-add', noteId, itemId: id, itemText: text }, text ? `Added “${text}”` : 'Added checklist item', () => {
       this.prepareChecklist(noteId);
+      if (remainingText !== undefined) {
+        updateText(this.items.get(afterItemId)!.get('text'), remainingText);
+        this.projection.itemChanged(afterItemId);
+      }
       this.insertItem(id, noteId, text, 0, parentId); this.placeItem(id, parentId, siblings, insertAt);
     });
     return id;
