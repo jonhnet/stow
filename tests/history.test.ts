@@ -82,3 +82,58 @@ test('item lookup and a cached note lookup never enumerate the whole item map', 
   assert.equal(vault.getNote(a.id)!.items[0].checked, true); assert.equal(vault.getNote(b.id)!.items.length, 25);
   vault.destroy();
 });
+
+test('cold note materialization and text edits do not enumerate unrelated merge recipes', t => {
+  const vault = new Vault(); t.after(() => vault.destroy());
+  for (let i = 0; i < 12; i++) {
+    const a = vault.createNote('text', { title: `A${i}`, body: 'first' });
+    const b = vault.createNote('text', { title: `B${i}`, body: 'second' });
+    vault.mergeNotes([a, b]);
+  }
+  const cold = replica(vault); t.after(() => cold.destroy());
+  t.mock.method(cold.mergeRecipes, Symbol.iterator, () => { throw new Error('Whole-vault recipe scan'); });
+  assert.equal(cold.getNotes().length, 12);
+  const id = cold.getNotes()[0].id;
+  cold.setNoteText(id, 'body', 'edited merged text'); cold.finishEdit();
+  assert.equal(cold.getNote(id)!.body, 'edited merged text');
+  assert.equal(Object.keys(cold.captureHistoryState([id]).recipes!).length, 1);
+});
+
+test('recipe ownership follows remote replacement and deletion without retaining the previous component', t => {
+  const vault = new Vault(); t.after(() => vault.destroy());
+  const a = vault.createNote('text', { title: 'A', body: 'a' }), b = vault.createNote('text', { title: 'B', body: 'b' });
+  const c = vault.createNote('text', { title: 'C', body: 'c' }), d = vault.createNote('text', { title: 'D', body: 'd' });
+  vault.mergeNotes([a, b]); vault.mergeNotes([c, d]);
+  const first = Object.values(vault.captureHistoryState([a]).recipes!)[0];
+  const second = Object.values(vault.captureHistoryState([c]).recipes!)[0];
+  const peer = replica(vault); t.after(() => peer.destroy()); peer.getNotes();
+  vault.doc.transact(() => {
+    vault.mergeRecipes.set(first.id, { ...second, id: first.id });
+    vault.mergeRecipes.delete(second.id);
+  }, 'remote');
+  sync(vault, peer);
+  assert.equal(peer.captureHistoryState([a]).recipes, undefined);
+  assert.deepEqual(Object.keys(peer.captureHistoryState([c]).recipes!), [first.id]);
+  assert.deepEqual(peer.getNotes(), vault.getNotes());
+  vault.mergeRecipes.delete(first.id); sync(vault, peer);
+  assert.equal(peer.captureHistoryState([c]).recipes, undefined);
+  vault.mergeRecipes.set(first.id, first); sync(vault, peer);
+  assert.deepEqual(Object.keys(peer.captureHistoryState([a]).recipes!), [first.id]);
+  assert.equal(peer.captureHistoryState([c]).recipes, undefined);
+  assert.deepEqual(peer.getNotes(), vault.getNotes());
+});
+
+test('recipe index follows merge undo and redo while preserving concurrent source text', t => {
+  const vault = new Vault(); t.after(() => vault.destroy());
+  const a = vault.createNote('text', { title: 'A', body: 'first' }), b = vault.createNote('text', { title: 'B', body: 'second' });
+  vault.undoManager.clear(); vault.mergeNotes([a, b]);
+  const peer = replica(vault); t.after(() => peer.destroy());
+  peer.doc.transact(() => peer.notes.get(b)!.get('body').insert(6, ' remote'), 'remote'); sync(vault, peer);
+  assert(vault.undo());
+  assert.equal(vault.getNotes().length, 2);
+  assert.equal(vault.getNote(b)!.body, 'second remote');
+  assert(vault.redo());
+  assert.equal(vault.getNotes().length, 1);
+  assert.match(vault.getNote(a)!.body, /second remote/);
+  assert.equal(Object.keys(vault.captureHistoryState([a]).recipes!).length, 1);
+});

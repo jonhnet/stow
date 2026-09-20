@@ -29,6 +29,8 @@ export class VaultProjection {
   private sourceViews = new Map<string, SourceView>();
   private noteViews = new Map<string, Note>();
   private sourceGroup = new Map<string, string>();
+  private recipesBySource = new Map<string, Set<string>>();
+  private recipeSources = new Map<string, readonly string[]>();
   private groups = new Map<string, string[]>();
   private orderedGroups: string[] = [];
   private groupsDirty = true;
@@ -37,6 +39,7 @@ export class VaultProjection {
   private cleanups: (() => void)[] = [];
 
   constructor(private notes: Y.Map<RecordMap>, private items: Y.Map<RecordMap>, private attachments: Y.Map<Attachment>, private merges: Y.Map<{ a: string; b: string }>, private labelLifecycle: Y.Map<LabelLifecycle>, private recipes: Y.Map<MergeRecipe>, private joins: Y.Map<Y.Text>) {
+    for (const id of recipes.keys()) this.recipeChanged(id);
     for (const id of items.keys()) this.itemChanged(id);
     for (const id of attachments.keys()) this.imageChanged(id);
     const affected = (events: Y.YEvent<any>[], root: Y.AbstractType<any>) => {
@@ -60,6 +63,7 @@ export class VaultProjection {
       this.compositionChanged(sources); this.membershipChanged();
     };
     const onRecipes = (event: Y.YMapEvent<MergeRecipe>) => {
+      for (const id of event.keysChanged) this.recipeChanged(id);
       const sources = [...event.changes.keys].flatMap(([id, change]) => [change.oldValue, recipes.get(id)].filter(Boolean).flatMap(recipe => recipe.sourceIds));
       this.compositionChanged(sources);
     };
@@ -184,10 +188,26 @@ export class VaultProjection {
     this.list = undefined;
   }
   sourceIds(id: string): string[] { this.ensureGroups(); const group = this.sourceGroup.get(id); return group ? this.groups.get(group)! : []; }
+  recipeChanged(id: string) {
+    for (const source of this.recipeSources.get(id) ?? []) {
+      const recipes = this.recipesBySource.get(source);
+      recipes?.delete(id);
+      if (!recipes?.size) this.recipesBySource.delete(source);
+    }
+    const current = this.recipes.get(id);
+    if (current) this.recipeSources.set(id, current.sourceIds);
+    else this.recipeSources.delete(id);
+    for (const source of current?.sourceIds ?? []) {
+      let recipes = this.recipesBySource.get(source);
+      if (!recipes) this.recipesBySource.set(source, recipes = new Set());
+      recipes.add(id);
+    }
+  }
   activeRecipes(sourceIds: string[]): Record<string, MergeRecipe> {
     const members = new Set(sourceIds);
     const deleted = this.notes.doc!.getMap<true>('deletedNotes');
-    return Object.fromEntries([...this.recipes].filter(([, recipe]) => recipe.edgeIds.some(id => {
+    const candidates = new Set(sourceIds.flatMap(id => [...this.recipesBySource.get(id) ?? []]));
+    return Object.fromEntries([...candidates].map(id => [id, this.recipes.get(id)!] as const).filter(([, recipe]) => recipe.edgeIds.some(id => {
       const edge = this.merges.get(id);
       return edge && (members.has(edge.a) || deleted.has(edge.a)) && (members.has(edge.b) || deleted.has(edge.b)) && recipe.sourceIds.some(sourceId => members.has(sourceId));
     })));

@@ -376,7 +376,10 @@ export class Vault {
       [...text.bodyRefs, ...(index < texts.length - 1 ? [joins[titles.length + index]] : [])])];
   }
   private saveRecipe(recipe: MergeRecipe) {
-    this.mergeRecipes.set(recipe.id, recipe); this.projection.compositionChanged(recipe.sourceIds);
+    this.mergeRecipes.set(recipe.id, recipe);
+    // Composition can be read again before this transaction delivers observers.
+    this.projection.recipeChanged(recipe.id);
+    this.projection.compositionChanged(recipe.sourceIds);
   }
   /** Keep every original field, including empty fields, as an editable CRDT run. */
   private replaceTextRuns(refs: TextRef[], value: string) {
