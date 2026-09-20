@@ -162,6 +162,8 @@ pub struct Vault {
     pub(crate) retention_path: PathBuf,
     pub(crate) retention: Schedule,
     pub history: History,
+    pub(crate) history_items: crate::ownership::OwnedRecords,
+    pub(crate) history_images: crate::ownership::OwnedRecords,
     pub history_error: Option<String>,
     pub history_capture_failures: Ids,
     pub pending_label_changes: BTreeMap<String, Value>,
@@ -229,6 +231,8 @@ impl Vault {
         let retention_path = directory.join("history-retention.json");
         let retention = Schedule::read(&retention_path)?;
         let mut vault = Self {
+            history_items: crate::ownership::OwnedRecords::new(&doc, "items"),
+            history_images: crate::ownership::OwnedRecords::new(&doc, "attachments"),
             doc,
             validation: ObservedDoc::new(new_doc()),
             snapshot_path,

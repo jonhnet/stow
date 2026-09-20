@@ -223,6 +223,17 @@ pub fn capture(doc: &Doc, selected: &[String]) -> Result<Value> {
         .into_iter()
         .filter(|g| g.iter().any(|id| wanted.contains(id)))
         .collect();
+    let items = crate::ownership::OwnedRecords::new(doc, "items");
+    let images = crate::ownership::OwnedRecords::new(doc, "attachments");
+    capture_groups(doc, groups, &items, &images)
+}
+
+pub(crate) fn capture_groups(
+    doc: &Doc,
+    groups: Vec<Vec<String>>,
+    items: &crate::ownership::OwnedRecords,
+    images: &crate::ownership::OwnedRecords,
+) -> Result<Value> {
     let ids: Ids = groups.iter().flatten().cloned().collect();
     let mut tx = doc.transact_mut();
     let mut sources = serde_json::Map::new();
@@ -295,7 +306,7 @@ pub fn capture(doc: &Doc, selected: &[String]) -> Result<Value> {
         .iter()
         .flat_map(|group| group.iter().map(|id| (id.as_str(), group[0].as_str())))
         .collect();
-    for (id, item) in entries(&tx, "items", None) {
+    for (id, item) in items.entries(&tx, &ids) {
         let owner = string(&item["noteId"]);
         source_items
             .entry(components.get(owner).copied().unwrap_or(owner).into())
@@ -315,7 +326,7 @@ pub fn capture(doc: &Doc, selected: &[String]) -> Result<Value> {
             source["items"][id] = v;
         }
     }
-    for (id, image) in entries(&tx, "attachments", None) {
+    for (id, image) in images.entries(&tx, &ids) {
         if let Some(source) = sources.get_mut(string(&image["noteId"])) {
             source["images"][id] = image;
         }

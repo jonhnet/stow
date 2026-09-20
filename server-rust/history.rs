@@ -631,7 +631,12 @@ impl Vault {
             .into_iter()
             .filter(|g| g.iter().any(|s| selected.contains(s)))
         {
-            let snapshot = state::capture(&self.doc, &ids)?;
+            let snapshot = state::capture_groups(
+                &self.doc,
+                vec![ids.clone()],
+                &self.history_items,
+                &self.history_images,
+            )?;
             let mut names: Ids = object(&snapshot["sources"])
                 .flat_map(|(_, s)| strings(&s["labels"]))
                 .collect();

@@ -322,3 +322,122 @@ fn compressing_mixed_sources_preserves_other_sources_complete_timeline() {
             .collect::<Vec<_>>()
     );
 }
+
+#[test]
+fn history_boundary_does_not_scan_unrelated_items_or_repeat_membership_work() {
+    let mut f = Fixture::new();
+    for id in ["a", "b", "other"] {
+        note(&f.client, id, id);
+    }
+    for i in 0..100 {
+        put(
+            &mut f.client.transact_mut(),
+            "items",
+            &format!("other-{i}"),
+            json!({"noteId":"other","text":"unrelated","rank":i}),
+        );
+    }
+    f.submit(1.).unwrap();
+    take_scans();
+    f.vault
+        .capture_history(&json!({"sourceIds":["a","b"],"editedAt":2}), 2.)
+        .unwrap();
+    let scans = take_scans();
+    for root in ["items", "attachments"] {
+        assert_eq!(
+            scans.get(root),
+            None,
+            "capture must use ownership index for {root}"
+        );
+    }
+    assert_eq!(
+        scans.get("notes"),
+        Some(&1),
+        "one membership pass per boundary"
+    );
+}
+
+#[test]
+fn history_ownership_tracks_moves_replacements_deletion_and_restart() {
+    let mut f = Fixture::new();
+    note(&f.client, "a", "a");
+    note(&f.client, "b", "b");
+    let items = root(&f.client.transact(), "items");
+    let item = items.insert(&mut f.client.transact_mut(), "i", MapPrelim::default());
+    {
+        let mut tx = f.client.transact_mut();
+        item.insert(&mut tx, "noteId", "a");
+        item.insert(&mut tx, "text", TextPrelim::new("first"));
+        item.insert(&mut tx, "rank", 1);
+    }
+    attachment(&f.client, "photo", "a", &"a".repeat(64));
+    f.submit(1.).unwrap();
+    let capture = |f: &Fixture, id: &str| {
+        history_state::capture_groups(
+            &f.vault.doc,
+            vec![ids(&[id])],
+            &f.vault.history_items,
+            &f.vault.history_images,
+        )
+        .unwrap()
+    };
+    assert_eq!(
+        capture(&f, "a")["sources"]["a"]["items"]["i"]["text"],
+        "first"
+    );
+    item.insert(&mut f.client.transact_mut(), "noteId", "b");
+    attachment(&f.client, "photo", "b", &"a".repeat(64));
+    f.submit(2.).unwrap();
+    for restart in [false, true] {
+        if restart {
+            f.reopen();
+        }
+        assert_eq!(capture(&f, "a")["sources"]["a"]["items"], json!({}));
+        assert_eq!(capture(&f, "a")["sources"]["a"]["images"], json!({}));
+        assert_eq!(
+            capture(&f, "b")["sources"]["b"]["items"]["i"]["text"],
+            "first"
+        );
+        assert_eq!(
+            capture(&f, "b")["sources"]["b"]["images"]["photo"]["noteId"],
+            "b"
+        );
+    }
+    // A whole-record replacement and a deleted/recreated ID are different from
+    // a nested owner change; both must retire the previous index entry.
+    put(
+        &mut f.client.transact_mut(),
+        "items",
+        "i",
+        json!({"noteId":"a","text":"replacement","rank":2}),
+    );
+    remove(&mut f.client.transact_mut(), "attachments", "photo");
+    f.submit(3.).unwrap();
+    assert_eq!(capture(&f, "b")["sources"]["b"]["items"], json!({}));
+    assert_eq!(capture(&f, "b")["sources"]["b"]["images"], json!({}));
+    remove(&mut f.client.transact_mut(), "items", "i");
+    f.submit(4.).unwrap();
+    put(
+        &mut f.client.transact_mut(),
+        "items",
+        "i",
+        json!({"noteId":"b","text":"recreated","rank":3}),
+    );
+    let dependency = diff(&f.client, &f.vault.doc.transact().state_vector());
+    let previous = f.client.transact().state_vector();
+    attachment(&f.client, "photo", "b", &"b".repeat(64));
+    let later = diff(&f.client, &previous);
+    f.vault.accept(&later, 5.).unwrap();
+    f.vault.accept(&dependency, 6.).unwrap();
+    assert_eq!(
+        capture(&f, "b")["sources"]["b"]["items"]["i"]["text"],
+        "recreated"
+    );
+    assert_eq!(
+        capture(&f, "b")["sources"]["b"]["images"]["photo"]["hash"],
+        "b".repeat(64)
+    );
+    tombstone(&f.client, "b");
+    f.submit(7.).unwrap();
+    assert_eq!(capture(&f, "a")["sources"]["a"]["items"], json!({}));
+}

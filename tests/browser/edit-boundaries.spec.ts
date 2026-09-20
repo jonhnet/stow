@@ -351,7 +351,11 @@ test('a newly created note seals title, body and checklist edits at their field 
   await editor(page).getByRole('button', { name: 'Close', exact: true }).click();
   const baseline = await historyCount(page);
   await page.getByRole('button', { name: 'Take a note…', exact: true }).click();
-  await append(title(page), 'New note boundary');
+  // History captures current server state: creation and typing can coalesce
+  // unless creation is observed before the subsequent title session.
+  await append(title(page), 'N');
+  await expectHistory(page, baseline + 1);
+  await append(title(page), 'ew note boundary');
   await body(page).focus();
   await expectHistory(page, baseline + 2); // Creation plus the title session.
   await append(body(page), 'New note body');
