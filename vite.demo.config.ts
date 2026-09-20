@@ -30,7 +30,7 @@ export default defineConfig({
         if (!html.includes('src="/src/main.tsx"')) throw new Error('The demo entry point no longer matches index.html.');
         return html.replace('src="/src/main.tsx"', 'src="/src/demo/main.tsx"')
           .replace('<title>Stow</title>', '<title>Stow Demo — changes are not saved</title>')
-          .replace('<link rel="manifest" href="/manifest.webmanifest" />', '')
+          .replace(/<link\b(?=[^>]*\brel="manifest")[^>]*>/g, '')
           .replace('<head>', `<head><meta http-equiv="Content-Security-Policy" content="${policy}" /><meta name="referrer" content="no-referrer" />`);
       },
     },
