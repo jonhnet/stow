@@ -59,7 +59,7 @@ thread_local! { static SCANS: std::cell::RefCell<BTreeMap<String,usize>> = const
 pub fn take_scans() -> BTreeMap<String, usize> {
     SCANS.with(|v| std::mem::take(&mut *v.borrow_mut()))
 }
-fn record_scan(name: &str) {
+pub(crate) fn record_scan(name: &str) {
     #[cfg(any(test, feature = "test-support"))]
     SCANS.with(|v| *v.borrow_mut().entry(name.into()).or_default() += 1);
     #[cfg(not(any(test, feature = "test-support")))]

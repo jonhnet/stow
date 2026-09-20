@@ -162,6 +162,7 @@ impl History {
         self.remove_temporaries()
     }
     fn remove_temporaries(&self) -> Result<()> {
+        crate::crdt::record_scan("historyDirectory");
         let mut removed = false;
         for entry in fs::read_dir(&self.directory)? {
             let e = entry?;

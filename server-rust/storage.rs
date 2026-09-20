@@ -132,6 +132,7 @@ pub(crate) struct CleanupJournal {
 pub struct DurableUpdate {
     bytes: Vec<u8>,
     corrected: bool,
+    history_cleanup: bool,
     pub touched: Ids,
 }
 impl DurableUpdate {
@@ -292,8 +293,7 @@ impl Vault {
         }
         let accepted = result?;
         apply(&self.doc, accepted.bytes())?;
-        let deleted = !keys(&self.doc.transact(), "deletedNotes").is_empty();
-        self.sanitize_history(deleted);
+        self.sanitize_history(accepted.history_cleanup);
         self.clean_blobs()?;
         Ok(accepted)
     }
@@ -386,7 +386,9 @@ impl Vault {
         if corrected {
             accepted = diff(&self.validation.doc, &before);
         }
-        if deletion_changed || manifests || compact || self.needs_compaction {
+        // A previous attempt may have published the deletion before log cleanup failed.
+        let history_cleanup = deletion_changed || manifests || self.needs_compaction;
+        if history_cleanup || compact {
             accepted = diff(&self.validation.doc, &before);
             self.queue_cleanup(true)?;
             self.needs_compaction = true;
@@ -415,6 +417,7 @@ impl Vault {
         Ok(DurableUpdate {
             bytes: accepted,
             corrected,
+            history_cleanup,
             touched: changes.touched,
         })
     }

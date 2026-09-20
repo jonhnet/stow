@@ -206,3 +206,65 @@ fn only_published_update_files_are_replayed_and_corruption_is_preserved() {
     assert!(Vault::open(f.directory.path(), 1.).is_err());
     assert_eq!(fs::read(path).unwrap(), [1]);
 }
+
+#[test]
+fn unrelated_typing_after_deletion_does_not_rescan_history_directory() {
+    let mut f = Fixture::new();
+    note(&f.client, "keep", "keep");
+    note(&f.client, "erase", "erase");
+    f.save(&["erase"], 1.);
+    let offline = clone_doc(&f.client).unwrap();
+    tombstone(&f.client, "erase");
+    f.submit(2.).unwrap();
+    for reopen in [false, true] {
+        if reopen {
+            f.reopen();
+        }
+        take_scans();
+        append(&f.client, "keep", "body", "!");
+        f.submit(3.).unwrap();
+        assert_eq!(take_scans().get("historyDirectory"), None);
+    }
+    append(&offline, "erase", "body", " late secret");
+    f.vault.accept(&encode(&offline), 4.).unwrap();
+    f.reopen();
+    assert!(get(&f.vault.doc.transact(), "notes", "erase").is_null());
+    assert_eq!(f.body("keep"), "keep!!");
+    assert!(f.vault.history.sources().unwrap().is_empty());
+}
+
+#[test]
+fn unrelated_typing_retries_failed_history_erasure() {
+    let mut f = Fixture::new();
+    note(&f.client, "keep", "keep");
+    note(&f.client, "erase", "private");
+    f.save(&["erase"], 1.);
+    f.vault.history.faults.insert("writeBundle".into());
+    tombstone(&f.client, "erase");
+    f.submit(2.).unwrap();
+    assert!(f.vault.history_error.is_some());
+    f.vault.history.faults.clear();
+    append(&f.client, "keep", "body", "!");
+    f.submit(3.).unwrap();
+    assert!(f.vault.history.sources().unwrap().is_empty());
+    f.reopen();
+    assert!(f.vault.history.sources().unwrap().is_empty());
+    assert_eq!(f.body("keep"), "keep!");
+}
+
+#[test]
+fn retry_after_partial_deletion_commit_still_erases_history() {
+    let mut f = Fixture::new();
+    note(&f.client, "keep", "keep");
+    note(&f.client, "erase", "private");
+    f.save(&["erase"], 1.);
+    let updates = f.vault.update_dir.clone();
+    f.vault.update_dir = f.directory.path().join("missing-updates");
+    tombstone(&f.client, "erase");
+    assert!(f.submit(2.).is_err());
+    assert!(get(&f.vault.doc.transact(), "notes", "erase").is_null());
+    f.vault.update_dir = updates;
+    append(&f.client, "keep", "body", "!");
+    f.submit(3.).unwrap();
+    assert!(f.vault.history.sources().unwrap().is_empty());
+}
