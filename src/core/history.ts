@@ -1,7 +1,12 @@
-import type { HistoryPatch, HistoryState, SourceField } from './history-types';
+import type { HistoryPatch, HistorySource, HistoryState, SourceField } from './history-types';
 import { textSplice } from './text-splice';
 
 const fields: SourceField[] = ['kind', 'color', 'pinned', 'archived', 'trashed', 'createdAt', 'sortOrderDate', 'updatedAt'];
+function sourceSet<K extends SourceField>(sourceId: string, field: K, value: NonNullable<HistorySource[K]>): Extract<HistoryPatch, { op: 'set' }> {
+  // Both arguments come from the same indexed source field. TypeScript cannot
+  // distribute a generic key into the mapped union returned here.
+  return { op: 'set', sourceId, field, value } as Extract<HistoryPatch, { op: 'set' }>;
+}
 const ids = (a: object, b: object) => [...new Set([...Object.keys(a), ...Object.keys(b)])].sort();
 
 export function diffHistory(before: HistoryState, after: HistoryState): HistoryPatch[] {
@@ -14,7 +19,7 @@ export function diffHistory(before: HistoryState, after: HistoryState): HistoryP
     for (const field of fields) {
       const old = field === 'sortOrderDate' ? a.sortOrderDate ?? a.createdAt : a[field];
       const value = field === 'sortOrderDate' ? b.sortOrderDate ?? b.createdAt : b[field];
-      if (old !== value) patches.push({ op: 'set', sourceId, field, value: value! });
+      if (old !== value) patches.push(sourceSet(sourceId, field, value!));
     }
     if (JSON.stringify(a.labels ?? []) !== JSON.stringify(b.labels ?? []) || JSON.stringify(a.labelGenerations ?? {}) !== JSON.stringify(b.labelGenerations ?? {})) {
       patches.push({ op: 'labels', sourceId, value: b.labels ?? [], ...(b.labelGenerations ? { generations: b.labelGenerations } : {}) });

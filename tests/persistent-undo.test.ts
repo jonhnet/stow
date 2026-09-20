@@ -136,6 +136,7 @@ test('live tabs keep separate undo stacks, while a fresh page recovers an inacti
 });
 
 test('permanent deletion purges inactive undo payloads and retains unrelated undo', async t => {
+  let now = 10000; t.mock.method(Date, 'now', () => now);
   const ownership = locks(), p = await page(t, ownership);
   const deleted = p.vault.createNote('text'), retained = p.vault.createNote('text');
   p.vault.setNoteText(deleted, 'body', 'ERASE_SECRET_OLD'); p.vault.finishEdit();
@@ -146,6 +147,9 @@ test('permanent deletion purges inactive undo payloads and retains unrelated und
   other.vault.setNoteMeta(deleted, { trashed: true }); other.vault.deleteNotesForever([deleted]);
   await other.persistence.destroy();
   // Simulate an old offline tab trying to persist its old retained content.
+  // Recovery selects the most recently edited inactive stack: make that order
+  // explicit instead of depending on these writes crossing a wall-clock ms.
+  now++;
   p.vault.setNoteMeta(retained, { pinned: true }); await p.persistence.destroy(); await compact();
   const db = await openPersistenceDatabase('undo-test');
   assert(!Buffer.concat((await db.getAll('updates')).map(update => Buffer.from(update))).toString().includes('ERASE_SECRET'));

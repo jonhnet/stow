@@ -1,6 +1,6 @@
 import * as Y from 'yjs';
 import type { Attachment, Item, Label, Note, NoteColor, NoteKind, SourceNote } from './types';
-import type { EditDraft, HistoryAction, HistoryBoundary, HistoryState, LabelChange, LabelSettingState, PendingEdit } from './history-types';
+import type { EditDraft, HistoryIntent, HistoryBoundary, HistoryState, LabelChange, LabelSettingState, PendingEdit } from './history-types';
 export type { EditDraft } from './history-types';
 import { diffHistory } from './history';
 import { historyNotes } from './history-view';
@@ -56,7 +56,7 @@ export function updateText(text: Y.Text, value: string) {
   if (patch.insert) text.insert(patch.index, patch.insert);
 }
 
-type Action = Omit<HistoryAction, 'changes'>;
+type Action = HistoryIntent;
 export class Vault {
   readonly doc: Y.Doc;
   readonly notes: Y.Map<RecordMap>;
@@ -419,7 +419,7 @@ export class Vault {
     const positions = pinChanged ? notePositionChanges([current, ...this.getNotes().filter(note => note.id !== current.id && sameNoteBucket(note, { ...current, ...patch }))], 0, Date.now()) : new Map<string, number>();
     const label = 'trashed' in patch ? patch.trashed ? 'Moved note to trash' : 'Restored note from trash' : 'archived' in patch ? patch.archived ? 'Archived note' : 'Unarchived note' : 'pinned' in patch ? patch.pinned ? 'Pinned note' : 'Unpinned note' : 'kind' in patch ? 'Changed note format' : 'Changed note color';
     const keys = Object.keys(patch);
-    this.change([...current.sourceIds, ...positions.keys()], { type: 'metadata', noteId: current.id, ...(keys.length === 1 ? { field: keys[0] as HistoryAction['field'] } : {}) }, label, () => {
+    this.change([...current.sourceIds, ...positions.keys()], { type: 'metadata', noteId: current.id, ...(keys.length === 1 ? { field: keys[0] as keyof typeof patch } : {}) }, label, () => {
       this.applyNotePositions(positions);
       for (const sourceId of changed) {
         const source = this.notes.get(sourceId)!;

@@ -1,8 +1,8 @@
-import type { HistoryAction, HistorySource, HistoryState, LabelChange } from './history-types';
+import type { HistoryIntent, HistorySource, HistoryState, LabelChange } from './history-types';
 import { textSplice } from './text-splice';
 import { historyText } from './history-view';
 
-type Action = Omit<HistoryAction, 'changes'>;
+type Action = HistoryIntent;
 export interface TextDescription {
   target: string; scope: 'Title' | 'Note' | 'Item'; index: number; removed: string; inserted: string;
 }

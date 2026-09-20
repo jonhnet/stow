@@ -235,3 +235,17 @@ test('Undo and Redo of tile order or global label color leave note modification 
   now = 16000; vault.undo(); assert.equal(vault.getNote(first)!.updatedAt, 14000);
   now = 17000; vault.redo(); assert.equal(vault.getNote(first)!.updatedAt, 14000);
 });
+
+test('redacting an item target leaves a valid generic action for surviving draft changes', t => {
+  const vault = new Vault(); t.after(() => vault.destroy());
+  const gone = vault.createNote('checklist'), keep = vault.createNote('text', { body: 'before' });
+  const itemId = vault.addItem(gone, 'private item');
+  const before = vault.captureHistoryState([gone, keep]);
+  vault.setItemText(itemId, 'private edit'); vault.setNoteText(keep, 'body', 'surviving edit');
+  const after = vault.captureHistoryState([gone, keep]);
+  const redacted = redactEditDraft({ sourceIds: [gone, keep], before, after,
+    action: { type: 'text', noteId: gone, field: 'text', itemId }, firstInputAt: 1, lastInputAt: 2 }, new Set([gone]))!;
+  assert.equal(redacted.after.sources[keep].body, 'surviving edit');
+  assert.deepEqual(redacted.action, { type: 'metadata', noteId: keep });
+  assert(!JSON.stringify(redacted).includes('private'));
+});
