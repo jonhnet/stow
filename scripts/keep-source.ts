@@ -86,19 +86,17 @@ function escapeMarkdownSyntax(text: string): string {
     .replace(/^([ \t]*)([#+=-])/gm, '$1\\$2')
     .replace(/^([ \t]*)(\d+)([.)])(?=\s)/gm, '$1$2\\$3');
 }
-function escapeLiteral(text: string): string {
-  return escapeMarkdownSyntax(text)
-    // Markdown trims line-edge spaces and treats indentation as code. Entities
-    // preserve those characters through both the block and inline renderers.
-    .replace(/^[ \t]+|[ \t]+$/gm, value => value.replace(/ /g, '&#32;').replace(/\t/g, '&#9;'));
-}
+function trimLineEdges(text: string): string { return text.replace(/^[ \t]+|[ \t]+$/gm, ''); }
 const linkifier = new MarkdownIt({ linkify: true }).linkify;
 linkifier.set({ fuzzyLink: true });
 function destination(url: string): string { return url.replace(/[<>\\]/g, char => encodeURIComponent(char)); }
 
 /** Preserve plaintext as plaintext when displaying it through Stow's Markdown parser. */
 export function keepPlaintextMarkdown(text: string): string {
-  return linkifiedMarkdown(text, escapeLiteral);
+  // Discard source line-edge whitespace rather than encoding it into the editor.
+  // Normalize the whole field before splitting links: fragment edges can be
+  // ordinary spaces between words, and must remain intact.
+  return linkifiedMarkdown(trimLineEdges(text), escapeMarkdownSyntax);
 }
 function linkifiedMarkdown(text: string, escape: (value: string) => string): string {
   let result = '', offset = 0;
@@ -245,7 +243,7 @@ export async function readKeepSource(inputPath: string, stagingDir: string, limi
       let parsed: URL;
       try { parsed = new URL(url); } catch { invalid(sourcePath, 'annotation URL is invalid'); }
       const label = string(annotation.title ?? '', sourcePath, 'annotation.title') || url;
-      body += `${body ? '\n\n' : ''}[${escapeLiteral(label).replace(/\n/g, ' ')}](<${destination(parsed.href)}>)`;
+      body += `${body ? '\n\n' : ''}[${escapeMarkdownSyntax(trimLineEdges(label)).replace(/\n/g, ' ')}](<${destination(parsed.href)}>)`;
       appended.add(url);
       warn('missing-annotation-links-added-to-body', sourcePath);
     }

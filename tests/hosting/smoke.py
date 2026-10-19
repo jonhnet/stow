@@ -115,9 +115,9 @@ def main():
                 time.sleep(0.2)
         raise AssertionError('HTTPS did not become ready')
 
-    def browser(phase):
+    def browser(phase, label=None):
         env = {**os.environ, 'STOW_TEST_PASSWORD': password}
-        with (log_dir / f'browser-{phase}.log').open('w') as log:
+        with (log_dir / f'browser-{label or phase}.log').open('w') as log:
             run('podman', 'run', '--rm', '--network', 'bridge', '--name', name + '-browser',
                 '--env', 'STOW_TEST_PASSWORD', '--env', 'STOW_TEST_ORIGIN=' + origin,
                 '--env', 'STOW_TEST_PHASE=' + phase,
@@ -195,7 +195,7 @@ def main():
         with (log_dir / 'update.log').open('w') as log:
             run(*command, stdout=log, stderr=subprocess.STDOUT)
         assert fingerprints == {path: hashlib.sha256((state / path).read_bytes()).digest() for path in retained}, 'Update changed credentials or identity'
-        browser('recover')
+        browser('recover', 'after-update')
         run('systemctl', 'stop', *services)
         # Follow the documented full-directory backup, then restore it into an
         # empty location. Keep the original fixture until all checks finish.
@@ -208,7 +208,7 @@ def main():
         run('systemctl', 'start', services[0])
         wait_ready()
         assert fingerprints == {path: hashlib.sha256((state / path).read_bytes()).digest() for path in retained}
-        browser('recover')
+        browser('recover', 'after-restore')
         # An application crash must restart it without leaving its HTTPS proxy
         # permanently stopped by a systemd dependency.
         previous_container = output('podman', 'inspect', '--format', '{{.Id}}', name + '-app')

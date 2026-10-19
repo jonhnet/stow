@@ -125,6 +125,39 @@ test('a failed browser prompt reports the problem without reusing the consumed o
   expect(await page.evaluate(() => window.installTest.requests)).toBe(1);
 });
 
+test('Chrome can load the installation manifest behind cookie authentication', async ({ playwright }, info) => {
+  // A new ordinary profile exercises Chrome's native manifest request. Existing
+  // service-worker caches must not turn a credential-free request into success.
+  const context = await playwright.chromium.launchPersistentContext(info.outputPath('authenticated-profile'), {
+    ...info.project.use.launchOptions, serviceWorkers: 'block', viewport: { width: 390, height: 844 },
+  });
+  try {
+    const origin = 'http://localhost:4173';
+    await context.addCookies([{ name: 'stow_install_proxy', value: 'authenticated', url: origin, httpOnly: true }]);
+    const authenticatedRequests: boolean[] = [];
+    await context.route(`${origin}/manifest.webmanifest`, async route => {
+      const cookie = await route.request().headerValue('cookie');
+      const authenticated = cookie?.split(';').some(value => value.trim() === 'stow_install_proxy=authenticated') ?? false;
+      authenticatedRequests.push(authenticated);
+      if (!authenticated) {
+        await route.fulfill({ status: 401, contentType: 'text/html', body: '<!doctype html><title>Sign in</title>' });
+        return;
+      }
+      await route.continue();
+    });
+    const page = context.pages()[0];
+    await page.goto(origin);
+    const devtools = await context.newCDPSession(page);
+    // fetch(link.href) would send cookies by default and miss this regression.
+    const manifest = await devtools.send('Page.getAppManifest');
+    expect(manifest.errors).toEqual([]);
+    expect(authenticatedRequests.length).toBeGreaterThan(0);
+    expect(authenticatedRequests).not.toContain(false);
+    await expect.poll(async () => (await devtools.send('Page.getInstallabilityErrors')).installabilityErrors).toEqual([]);
+    expect(JSON.parse(manifest.data!)).toMatchObject({ name: 'Stow', display: 'standalone' });
+  } finally { await context.close(); }
+});
+
 test('the production manifest has usable Android icons and caches them for offline launch', async ({ playwright }, info) => {
   // Playwright's default contexts are incognito, which Chrome cannot install
   // from. A disposable ordinary profile exercises real installability checks.

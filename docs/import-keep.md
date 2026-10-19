@@ -106,7 +106,7 @@ After an interruption or uncertain connection result, rerun the **same saved pla
 
 | Keep content | Stow result |
 | --- | --- |
-| Titles, note text, checklists | Imported with the exported item sequence and checked state. The audited Takeout JSON/HTML contains no checklist hierarchy, so imported checklists are flat. Plain text is escaped for Stow's Markdown renderer so punctuation keeps its displayed meaning; extra blank-line spacing is not fully preserved in display. |
+| Titles, note text, checklists | Imported with the exported item sequence and checked state. The audited Takeout JSON/HTML contains no checklist hierarchy, so imported checklists are flat. Plain text is escaped for Stow's Markdown renderer so punctuation keeps its displayed meaning. Plaintext bodies and checklist items discard spaces and tabs at the beginning and end of each line; internal spacing and source line breaks remain, although extra blank-line spacing is not fully preserved in display. |
 | Rich text | Supported formatting converts to Markdown. The preview reports conversions and formatting that remains only in the source JSON. |
 | Created and edited timestamps | Preserved at millisecond precision; the original microsecond values remain in the raw JSON. |
 | Pin, archive, trash, and color | Preserved, with Keep colors mapped to Stow's palette, including gray. |

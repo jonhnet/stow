@@ -61,7 +61,7 @@ test('source conversion retains timestamps, flags, colors, labels, checklist ord
   assert.deepEqual(result.warnings.map(value => value.code), ['collaborators-retained-in-source-only', 'task-metadata-retained-in-source-only', 'unreferenced-file-preserved']);
 });
 
-test('ordinary Keep HTML uses authoritative plaintext without interpreting Markdown or collapsing spaces', async t => {
+test('ordinary Keep HTML uses authoritative plaintext without interpreting Markdown or collapsing internal spaces', async t => {
   const plain = '## Heading\n- item\n1. numbered\n> quote\n---\n\n**literal** and _literal_ [label](url)\n    indented  text\n\ttab\n`code` &amp; <script> 😀\n';
   const { input, staging } = await fixture(t, { 'note.json': JSON.stringify(source({ textContent: plain,
     textContentHtml: '<p><span style="font-weight:400;white-space:pre-wrap">The HTML whitespace is deliberately different.</span></p>' })) });
@@ -71,7 +71,7 @@ test('ordinary Keep HTML uses authoritative plaintext without interpreting Markd
   const html = render(result.notes[0].body);
   assert.doesNotMatch(html, /<(?:h[1-6]|ul|ol|li|blockquote|hr|pre|code|em|strong|script)\b/);
   assert.match(html, /## Heading<br\/>- item<br\/>1\. numbered<br\/>&gt; quote<br\/>---/);
-  assert.match(html, /    indented  text<br\/>\ttab/);
+  assert.match(html, /indented  text<br\/>tab/);
   assert.match(html, /`code` &amp;amp; &lt;script&gt; 😀/);
 });
 
@@ -94,9 +94,39 @@ test('literal URLs retain underscores, query ampersands, encoded text and readab
   assert.doesNotMatch(html, /\\_|\\~|amp;amp/);
 });
 
-test('line-edge whitespace and ordinary line breaks survive inline rendering exactly', () => {
+test('imported Markdown keeps ordinary spaces around links in both preview and raw editing', async t => {
+  const body = 'See https://example.invalid/a_b?q=1&x=2 now.\nwww.example.org  follows.\nEmail a_b@example.invalid next.';
+  const item = 'Before  https://example.invalid/after\ttext';
+  const { input, staging } = await fixture(t, { 'note.json': JSON.stringify(source({
+    textContent: body, listContent: [{ text: item, isChecked: false }],
+  })) });
+  const { notes: [note] } = await readKeepSource(input, staging);
+  assert.equal(note.body, 'See [https://example.invalid/a\\_b?q=1&amp;x=2](<https://example.invalid/a_b?q=1&x=2>) now.\n[www.example.org](<http://www.example.org>)  follows.\nEmail [a\\_b@example.invalid](<mailto:a_b@example.invalid>) next.');
+  assert.equal(note.items[0].text, 'Before  [https://example.invalid/after](<https://example.invalid/after>)\ttext');
+  assert.equal(plainText(note.body), body);
+  assert.equal(plainText(note.items[0].text, true), item);
+});
+
+test('plaintext imports trim actual line-edge spaces and tabs without inventing entity source text', async t => {
+  const plain = '  # Literal heading  \n\tIndented  words\t\n  \t\n\n\tSee https://example.invalid/end  \n\t';
+  const expected = '\\# Literal heading\nIndented  words\n\n\nSee [https://example.invalid/end](<https://example.invalid/end>)\n';
+  const literalEntities = 'Literal &#32; and &#9;';
+  const { input, staging } = await fixture(t, { 'note.json': JSON.stringify(source({
+    textContent: plain, listContent: [{ text: plain, isChecked: false }, { text: literalEntities, isChecked: true }],
+  })) });
+  const { notes: [note] } = await readKeepSource(input, staging);
+  assert.equal(note.body, expected);
+  assert.equal(note.items[0].text, expected);
+  assert.doesNotMatch(note.body, /&#(?:32|9);/);
+  assert.equal(note.items[1].text, 'Literal &amp;#32; and &amp;#9;');
+  assert.equal(plainText(note.items[1].text, true), literalEntities);
+});
+
+test('plaintext conversion retains line breaks and blank lines while discarding line-edge whitespace', () => {
   const plain = '  Two spaces\n One space\n    Four spaces\nTrailing  \n\ttab\t\n  \n\nlast ';
-  assert.equal(plainText(keepPlaintextMarkdown(plain), true), plain);
+  const expected = 'Two spaces\nOne space\nFour spaces\nTrailing\ntab\n\n\nlast';
+  assert.equal(keepPlaintextMarkdown(plain), expected);
+  assert.equal(plainText(keepPlaintextMarkdown(plain), true), expected);
 });
 
 test('Keep CSS bold, italic and strike become inline Markdown; headings and links remain meaningful', async t => {
