@@ -177,7 +177,7 @@ test('arrows follow displayed checklist families and skip collapsed completed ro
   const body = textbox(editor, 'Note text');
   await body.focus();
   await body.fill('Checklist context');
-  const fields = [title, body, itemText(editor, 'Parent'), itemText(editor, 'Checked child'), itemText(editor, 'Other'), textbox(editor, 'New list item'), itemText(editor, 'Done')];
+  const fields = [title, body, itemText(editor, 'Parent'), itemText(editor, 'Other'), textbox(editor, 'New list item'), itemText(editor, 'Checked child'), itemText(editor, 'Done')];
   for (let index = 0; index < fields.length - 1; index++) {
     await caret(fields[index], 'end');
     await fields[index].press('ArrowDown');
@@ -192,14 +192,14 @@ test('arrows follow displayed checklist families and skip collapsed completed ro
     expect(await selection(fields[index - 1])).toEqual({ start: previousLength, end: previousLength });
   }
   const visibleRows = editor.locator('[data-check-row] .item-drag-handle');
-  // Checked state must not filter a child out of its family.
-  expect(await visibleRows.evaluateAll(handles => handles.map(handle => handle.getAttribute('aria-label')))).toEqual(['Reorder Parent', 'Reorder Checked child', 'Reorder Other', 'Reorder Done']);
+  // Navigation follows displayed order: completed children keep nesting but move below unchecked rows.
+  expect(await visibleRows.evaluateAll(handles => handles.map(handle => handle.getAttribute('aria-label')))).toEqual(['Reorder Parent', 'Reorder Other', 'Reorder Checked child', 'Reorder Done']);
   await expect(itemRow(editor, 'Parent').getByRole('checkbox')).not.toBeChecked();
   await expect(itemRow(editor, 'Checked child').getByRole('checkbox')).toBeChecked();
   await expect(itemRow(editor, 'Other').getByRole('checkbox')).not.toBeChecked();
   await expect(itemRow(editor, 'Done').getByRole('checkbox')).toBeChecked();
 
-  await editor.getByRole('button', { name: '1 completed item', exact: true }).click();
+  await editor.getByRole('button', { name: '2 completed items', exact: true }).click();
   await expect(itemRow(editor, 'Done')).toHaveCount(0);
   const add = textbox(editor, 'New list item');
   await add.focus();

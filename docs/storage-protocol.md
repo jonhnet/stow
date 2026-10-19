@@ -65,7 +65,7 @@ masked spans. This retains original converted text as current structural data
 Permanent source deletion removes the owning note and its masks. Both browser
 projection and Rust history capture apply these rules without writing repairs.
 
-WebSocket admission requires both `protocol=4` and `schema=stow-current-v1`, plus the exact verified `vaultId`. Rejection happens before opening account data. Password/proxy authentication, private proxy proof, incarnation reset, origin rules, and account-scoped HTTP headers remain required.
+WebSocket admission requires both `protocol=5` and `schema=stow-current-v1`, plus the exact verified `vaultId`. Rejection happens before opening account data. Password/proxy authentication, private proxy proof, incarnation reset, origin rules, and account-scoped HTTP headers remain required.
 
 Browsers send `X-Stow-Sync-Protocol` and `X-Stow-Schema` on the authenticated
 `/api/session` check. An incompatible client receives the verified account plus
@@ -116,3 +116,5 @@ Logical kinds are `sync-request`, `sync`, `update`, `history-boundary`, `sync-co
 History hints are ordered after the durable acknowledgment of the corresponding current upload. They have no offline outbox. Invalid history hints or history-write failures do not reject current updates or close the connection. A panic during capture is caught before it can poison the account lock; the server discards the in-memory vault and reopens durable current and history files. If reopening fails, subsequent operations retry recovery before accessing that account. Optional hint/notification admission failure does not close current sync. The initial `sync-complete` captures the sources accepted during catch-up once; an unchanged reload creates no arbitrary version. The client waits for outstanding hints before on-demand history or complete export, avoiding an HTTP read racing its own history request.
 
 The server leases cached vaults during requests and connections and evicts idle documents after 30 seconds, after queued operations settle. A panic while opening one vault is caught before it can poison the shared account registry. Current-only emergency export and complete online export are distinct operations.
+
+Shared notes use separate capability-authorized documents. Protocol 5 prevents older clients from treating private shared references as ordinary notes; see [sharing](sharing.md) for publication, scope isolation, retention, and recovery.

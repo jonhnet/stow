@@ -952,7 +952,7 @@ export class Vault {
     return this.getNote(first)?.id ?? '';
   }
 
-  private undoOrRedo(kind: 'undo' | 'redo'): string | undefined {
+  private undoOrRedo(kind: 'undo' | 'redo', single = false): string | undefined {
     this.finishEdit(true);
     const stack = kind === 'undo' ? this.undoManager.undoStack : this.undoManager.redoStack;
     if (!stack.length) return;
@@ -971,7 +971,14 @@ export class Vault {
     this.movingUndoAttachments = this.getUndoAttachments();
     let popped: ReturnType<Y.UndoManager['undo']>;
     try {
-      popped = this.undoManager[kind]();
+      // A multi-document coordinator must reconsider global ordering after
+      // each obsolete entry. Yjs normally skips straight to this document's
+      // next applicable action, which might be older than another document's.
+      const key = kind === 'undo' ? 'undoStack' : 'redoStack';
+      const earlier = single ? this.undoManager[key].slice(0, -1) : undefined;
+      if (earlier) this.undoManager[key] = this.undoManager[key].slice(-1);
+      try { popped = this.undoManager[kind](); }
+      finally { if (earlier) this.undoManager[key] = [...earlier, ...this.undoManager[key]]; }
       const retained = popped?.meta.get(UNDO_ATTACHMENTS) as Map<string, Attachment> | undefined;
       if (retained) (kind === 'undo' ? this.undoManager.redoStack : this.undoManager.undoStack).at(-1)?.meta.set(UNDO_ATTACHMENTS, retained);
     } finally { this.movingUndoAttachments = []; }
@@ -1043,6 +1050,7 @@ export class Vault {
       description: `${kind === 'undo' ? 'Undid' : 'Redid'}: ${description}` });
     return description;
   }
+  undoStep(kind: 'undo' | 'redo') { return this.undoOrRedo(kind, true); }
   undo() { return this.undoOrRedo('undo'); }
   redo() { return this.undoOrRedo('redo'); }
   destroy() {

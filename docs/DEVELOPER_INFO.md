@@ -67,6 +67,7 @@ Keep credentials outside the checkout and `build/`. Start with [`.env.example`](
 | `STOW_ORIGIN` | Exact browser-facing origin, including scheme and any nondefault port. Sets origin validation and enables Secure session cookies for HTTPS. Also configures Vite's allowed hostname and hot-reload URL. |
 | `STOW_ALLOW_INSECURE` | Explicitly permits passwordless binding beyond loopback when set to `true`; never relaxes proxy authentication. |
 | `STOW_SERVER_BIN` | Optional native executable override for administrative/import tools. Does not change the executable used by `npm start`. |
+| `VITE_STOW_LOGIN_URL` | Optional public SSO login URL, embedded at build time. Adds a Sign in link on shared-note pages. See [sharing](sharing.md). |
 | `VITE_STOW_DEVELOPMENT` | Set to `true` while building to mark an intentionally non-authoritative production bundle. Development builds always show the warning. |
 | `CHROME_PATH` | Optional Chrome executable for browser tests and performance runners. |
 

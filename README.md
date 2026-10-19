@@ -12,6 +12,12 @@ editing. It can be installed as an app (PWA) on Android.
 Note bodies support markdown-style headings, paragraphs, bulleted and numbered lists, quotations, horizontal rules, fenced/indented code, and tables.
 Both note bodies and checklist items support inline markdown: `*italic*`, `**bold**`, `~~strikethrough~~`, inline code, and `[named links](https://example.com)`.
 
+## Shared notes
+
+Use **Share note** to create an editable link. Anyone with the link can participate;
+**Add to my notes** keeps a personal reference with private labels, placement,
+and archive state. See [sharing behavior and hosting requirements](docs/sharing.md).
+
 ## Run a dev server locally
 
 Install the [development prerequisites](CONTRIBUTING.md), then run from the checkout:
@@ -43,7 +49,7 @@ Follow the [Keep import guide](docs/import-keep.md) to import notes, checklists,
 
 For an installer-managed server, follow the [home](docs/HOME_HOSTING.md#back-up-and-restore) or [internet](docs/INTERNET_HOSTING.md#back-up-and-restore) backup commands, which also preserve its private configuration.
 
-Back up the **complete data directory**, including `session-secret`, `vault-incarnations.json` if an [account reset](docs/account-reset.md) has been performed, and each vault's `account.json`, `vault.yjs`, `updates/`, `blobs/`, `blob-cleanup.json`, `history/`, and `history-retention.json` under `users/` (or the data directory itself in password mode). A snapshot alone can omit newer edits stored in `updates/`. Include any retained original files too. The server secret and account reset registry determine current user vault IDs, so preserve them. Stop the service first so snapshots, update logs, and blobs are copied together consistently. For the container described in the [Podman guide](docs/PODMAN.md), run `podman stop stow` before copying its volume and `podman start stow` afterward.
+Back up the **complete data directory**, including the `shared/`, `sharing/`, and `share-references/` directories for [shared notes](docs/sharing.md), `session-secret`, `vault-incarnations.json` if an [account reset](docs/account-reset.md) has been performed, and each vault's `account.json`, `vault.yjs`, `updates/`, `blobs/`, `blob-cleanup.json`, `history/`, and `history-retention.json` under `users/` (or the data directory itself in password mode). A snapshot alone can omit newer edits stored in `updates/`. Include any retained original files too. The server secret and account reset registry determine current user vault IDs, so preserve them. Stop the service first so snapshots, update logs, and blobs are copied together consistently. For the container described in the [Podman guide](docs/PODMAN.md), run `podman stop stow` before copying its volume and `podman start stow` afterward.
 
 To identify a vault directory, read its `account.json`: it records the verified username, authentication mode, and vault ID. Older directories acquire this file when their owner next opens Stow. Directories without it have an unknown owner; the server does not infer one from their contents.
 

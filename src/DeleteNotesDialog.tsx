@@ -6,8 +6,9 @@ export interface NoteDeletion {
   emptyTrash: boolean;
 }
 
-export default function DeleteNotesDialog({ deletion, onDelete, onClose }: {
+export default function DeleteNotesDialog({ deletion, onDelete, onClose, sharedCount = 0 }: {
   deletion: NoteDeletion;
+  sharedCount?: number;
   onDelete: (sourceIds: string[]) => Promise<void>;
   onClose: () => void;
 }) {
@@ -37,7 +38,7 @@ export default function DeleteNotesDialog({ deletion, onDelete, onClose }: {
   return <dialog ref={dialog} className="delete-notes-dialog" role="alertdialog" aria-labelledby={titleId} aria-describedby={descriptionId}
     onCancel={event => { event.preventDefault(); if (!busy) onClose(); }} onKeyDown={event => event.stopPropagation()}>
     <h2 id={titleId}>{title}</h2>
-    <p id={descriptionId}>{count === 1 ? `“${deletion.titles[0] || 'Untitled note'}” and its version history will be deleted.` : `${count} notes and their version histories will be deleted.`} This cannot be undone.</p>
+    <p id={descriptionId}>{sharedCount ? `This removes ${sharedCount === count ? "your shared references" : "the private notes and your shared references"} from your collection. Shared content and history stay available to other participants while someone keeps a reference. After the last reference is removed, the shared note is deleted after seven days.` : count === 1 ? `“${deletion.titles[0] || 'Untitled note'}” and its version history will be deleted.` : `${count} notes and their version histories will be deleted.`} This cannot be undone.</p>
     {error && <p className="delete-error" role="alert">{error}</p>}
     <div className="delete-dialog-actions">
       <button ref={cancel} type="button" className="text-button" disabled={busy} onClick={onClose}>Cancel</button>

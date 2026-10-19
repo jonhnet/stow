@@ -14,6 +14,7 @@ interface ImageDatabase extends DBSchema {
 export type ImageProgress = { pendingUploads: number; thumbnailsRemaining: number; originalBytes: number };
 export type ImageOptions = {
   vaultId: string;
+  databaseId?: string;
   assertAccount(): void;
   isOnline(): boolean;
   signal: AbortSignal;
@@ -111,7 +112,7 @@ export class ImageStore {
 
   private async initialize() {
     this.check();
-    const db = await openDB<ImageDatabase>(`stow-images-${this.options.vaultId}`, 2, {
+    const db = await openDB<ImageDatabase>(`stow-images-${this.options.databaseId ?? this.options.vaultId}`, 2, {
       upgrade(database, version, _next, transaction) {
         if (version === 0) database.createObjectStore('blobs', { keyPath: 'hash' });
         const metadata = database.createObjectStore('metadata', { keyPath: 'hash' });

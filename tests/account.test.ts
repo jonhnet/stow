@@ -1,3 +1,4 @@
+import { assertAccountScope } from '../src/core/account';
 import 'fake-indexeddb/auto';
 import assert from 'node:assert/strict';
 import { beforeEach, test } from 'node:test';
@@ -76,4 +77,16 @@ test('named local stores reopen only the selected account database', async t => 
     assert.equal(reopened.getText('body').toString(), 'Alice only');
     assert.deepEqual(opened, [aliceName]);
   } finally { await again.destroy(); alice.destroy(); bob.destroy(); reopened.destroy(); }
+});
+
+
+test('a shared scope cannot bootstrap from a private identity or another shared document', () => {
+  const privateAccount = { user: 'alice', vaultId: 'private-account-1234', authMode: 'proxy' as const };
+  const id = 'share_11111111-2222-4333-8444-555555555555';
+  assert.throws(() => assertAccountScope(privateAccount, id), /different document scope/);
+  const shared = { ...privateAccount, vaultId: id, principalId: privateAccount.vaultId };
+  assert.doesNotThrow(() => assertAccountScope(shared, id));
+  assert.throws(() => assertAccountScope(shared), /different document scope/);
+  assert.throws(() => assertAccountScope(shared, id.replace('1111', '2222')), /different document scope/);
+  assert.throws(() => assertAccountScope({ ...shared, principalId: undefined }, id), /different document scope/);
 });

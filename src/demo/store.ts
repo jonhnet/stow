@@ -11,6 +11,10 @@ import { kittenAssets } from './kitten-assets';
  * never constructs the account, persistence, sync, or image-upload services. */
 class DemoStore implements AppStore {
   readonly vault = new Vault();
+  readonly sharedPage = false;
+  async shareNote(): Promise<string> { throw new Error('Sharing is unavailable in the demo.'); }
+  async addSharedToCollection(): Promise<void> { throw new Error('Sharing is unavailable in the demo.'); }
+  async refreshParticipants(): Promise<void> {}
   private listeners = new Set<() => void>();
   private snapshot!: Snapshot;
 

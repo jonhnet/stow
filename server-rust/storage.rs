@@ -315,6 +315,15 @@ impl Vault {
         let had_pending = has_pending(&self.validation.doc);
         let (changes, emitted) = self.validation.apply(update)?;
         assert_current(&self.validation.doc)?;
+        if let Some(id) = self
+            .snapshot_path
+            .parent()
+            .and_then(|p| p.file_name())
+            .and_then(|n| n.to_str())
+            .filter(|n| n.starts_with("share_"))
+        {
+            crate::server::sharing::validate(&self.validation.doc, id, Some(&changes))?;
+        }
         let mut ownership = policy::References::new();
         {
             let tx = self.validation.doc.transact();

@@ -22,17 +22,18 @@ for (const width of [1280, 390]) test(`checklist groups display and toggle in ca
   const child = card.getByRole('checkbox', { name: 'Lantern', exact: true });
   const parentBox = await parent.boundingBox(), childBox = await child.boundingBox();
   expect(childBox!.x - parentBox!.x).toBeCloseTo(24, 0);
-  await child.check();
+  await child.click();
   await expect(parent).not.toBeChecked();
-  await expect(child).toBeChecked();
-  await expect(card.locator('[data-check-depth="1"]')).toHaveCount(2);
+  await expect(child).toHaveCount(0);
+  await expect(card.locator('[data-check-depth="1"]')).toHaveCount(1);
+  await expect(card).toContainText('1 completed item');
   await expect(page.getByRole('dialog')).toHaveCount(0);
   await parent.click();
   await expect(card).toContainText('3 completed items');
   await expect(card.getByRole('checkbox')).toHaveCount(0);
   await page.keyboard.press('Control+z');
   await expect(parent).not.toBeChecked();
-  await expect(child).toBeChecked();
+  await expect(child).toHaveCount(0);
   await expect(card.getByRole('checkbox', { name: 'Batteries', exact: true })).not.toBeChecked();
   await card.getByRole('heading', { name: 'Camping gear', exact: true }).click();
   const editor = page.getByRole('dialog', { name: 'Edit note', exact: true });
@@ -48,5 +49,8 @@ for (const width of [1280, 390]) test(`checklist groups display and toggle in ca
   await expect(editor).toBeVisible();
   await editor.getByRole('button', { name: 'Close', exact: true }).click();
   await expect(card).toHaveCount(2);
-  for (const copy of await card.all()) await expect(copy.locator('[data-check-depth="1"]')).toHaveCount(2);
+  for (const copy of await card.all()) {
+    await expect(copy.locator('[data-check-depth="1"]')).toHaveCount(1);
+    await expect(copy).toContainText('1 completed item');
+  }
 });

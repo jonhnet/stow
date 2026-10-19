@@ -9,6 +9,6 @@ export interface Attachment {
 }
 export interface Section { id: string; title: string; body: string; kind: NoteKind; items: Item[]; images: Attachment[]; labels?: string[] }
 export interface SourceNote extends Section { color: NoteColor; pinned: boolean; archived: boolean; trashed: boolean; createdAt: number; sortOrderDate: number; updatedAt: number; unifiedChecklist?: boolean }
-export interface Note extends Omit<SourceNote, 'unifiedChecklist'> { sourceIds: string[] }
+export interface Note extends Omit<SourceNote, 'unifiedChecklist'> { sourceIds: string[]; sharing?: { participants: { id: string; name: string; guest: boolean }[]; loading: boolean; error?: string } }
 export type { HistoryAction } from './history-types';
 export type SyncStatus = 'connecting' | 'online' | 'offline' | 'locked' | 'error' | 'demo';

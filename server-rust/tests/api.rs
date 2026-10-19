@@ -113,7 +113,7 @@ impl Socket {
         Self::query(
             s,
             h,
-            &format!("schema={CURRENT_SCHEMA}&protocol=4&vaultId={vault}"),
+            &format!("schema={CURRENT_SCHEMA}&protocol={SYNC_PROTOCOL}&vaultId={vault}"),
         )
         .await
         .unwrap()
@@ -376,7 +376,10 @@ async fn schema_protocol_and_vault_duplicates_reject_before_account_open() {
     let rejection = response.json()["syncRejection"].clone();
     assert_eq!(rejection["code"], "client_update_required");
     assert_eq!(rejection["action"], "reload");
-    assert_eq!(rejection["target"], format!("{CURRENT_SCHEMA}/4"));
+    assert_eq!(
+        rejection["target"],
+        format!("{CURRENT_SCHEMA}/{SYNC_PROTOCOL}")
+    );
     assert!(
         rejection["message"]
             .as_str()
@@ -384,14 +387,14 @@ async fn schema_protocol_and_vault_duplicates_reject_before_account_open() {
             .contains("Reload Stow")
     );
     assert_eq!(response.headers["cache-control"], "no-store");
-    preflight.insert("x-stow-sync-protocol", "4".parse().unwrap());
+    preflight.insert("x-stow-sync-protocol", SYNC_PROTOCOL.parse().unwrap());
     assert!(
         request(&s, "GET", "/api/session", &preflight, vec![])
             .await
             .json()["syncRejection"]
             .is_null()
     );
-    preflight.append("x-stow-sync-protocol", "4".parse().unwrap());
+    preflight.append("x-stow-sync-protocol", SYNC_PROTOCOL.parse().unwrap());
     assert_eq!(
         request(&s, "GET", "/api/session", &preflight, vec![])
             .await
@@ -403,12 +406,16 @@ async fn schema_protocol_and_vault_duplicates_reject_before_account_open() {
     assert_eq!(unauthenticated.status, 401);
     assert!(unauthenticated.json()["syncRejection"].is_null());
     for query in [
-        format!("protocol=4&vaultId={id}"),
-        format!("schema=old&protocol=4&vaultId={id}"),
-        format!("schema={CURRENT_SCHEMA}&schema={CURRENT_SCHEMA}&protocol=4&vaultId={id}"),
+        format!("protocol={SYNC_PROTOCOL}&vaultId={id}"),
+        format!("schema=old&protocol={SYNC_PROTOCOL}&vaultId={id}"),
+        format!(
+            "schema={CURRENT_SCHEMA}&schema={CURRENT_SCHEMA}&protocol={SYNC_PROTOCOL}&vaultId={id}"
+        ),
         format!("schema={CURRENT_SCHEMA}&protocol=1&vaultId={id}"),
         format!("schema={CURRENT_SCHEMA}&protocol=2&vaultId={id}"),
-        format!("schema={CURRENT_SCHEMA}&protocol=4&protocol=4&vaultId={id}"),
+        format!(
+            "schema={CURRENT_SCHEMA}&protocol={SYNC_PROTOCOL}&protocol={SYNC_PROTOCOL}&vaultId={id}"
+        ),
     ] {
         let mut rejected = Socket::query(&s, &h, &query).await.unwrap();
         assert_sync_rejection(&mut rejected, &rejection).await;
@@ -416,7 +423,7 @@ async fn schema_protocol_and_vault_duplicates_reject_before_account_open() {
     let Err(tungstenite::Error::Http(r)) = Socket::query(
         &s,
         &h,
-        &format!("schema={CURRENT_SCHEMA}&protocol=4&vaultId={id}&vaultId={id}"),
+        &format!("schema={CURRENT_SCHEMA}&protocol={SYNC_PROTOCOL}&vaultId={id}&vaultId={id}"),
     )
     .await
     else {
@@ -465,7 +472,7 @@ async fn incompatible_socket_after_successful_preflight_rejects_without_accessin
     let dir = tempfile::tempdir().unwrap();
     let s = start(dir.path(), json!({})).await;
     let mut headers = auth("deployment-race", None);
-    headers.insert("x-stow-sync-protocol", "4".parse().unwrap());
+    headers.insert("x-stow-sync-protocol", SYNC_PROTOCOL.parse().unwrap());
     headers.insert("x-stow-schema", CURRENT_SCHEMA.parse().unwrap());
     let session = request(&s, "GET", "/api/session", &headers, vec![]).await;
     assert_eq!(session.status, 200);
@@ -947,7 +954,7 @@ async fn sixteen_slots_are_account_local_and_close_releases_one() {
     let s = start(dir.path(), json!({})).await;
     let id = identity(&s, "alice").await;
     let h = auth("alice", Some(&id));
-    let query = format!("schema={CURRENT_SCHEMA}&protocol=4&vaultId={id}");
+    let query = format!("schema={CURRENT_SCHEMA}&protocol={SYNC_PROTOCOL}&vaultId={id}");
     let mut sockets = vec![];
     for _ in 0..16 {
         sockets.push(Socket::connect(&s, &h, &id).await);
@@ -1063,7 +1070,7 @@ async fn password_sessions_protect_blobs_origin_and_persist_until_password_rotat
             &s,
             &bad,
             &format!(
-                "schema={CURRENT_SCHEMA}&protocol=4&vaultId={}",
+                "schema={CURRENT_SCHEMA}&protocol={SYNC_PROTOCOL}&vaultId={}",
                 h["x-stow-vault"].to_str().unwrap()
             )
         )

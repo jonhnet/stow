@@ -27,5 +27,7 @@ if (!window.isSecureContext) {
     startupMark('react-render-requested');
     root.render(<React.StrictMode><App /></React.StrictMode>);
     if (import.meta.env.PROD) void navigator.serviceWorker.register('/sw.js').catch(console.error);
+  }).catch(error => {
+    root.render(<main className="login-wrap"><div className="login-card" role="alert"><h1>Could not open Stow</h1><p>{error instanceof Error ? error.message : 'Reload to try again.'}</p><a href="/">Open my collection</a></div></main>);
   });
 }

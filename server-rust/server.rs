@@ -1,3 +1,5 @@
+#[path = "sharing.rs"]
+pub(crate) mod sharing;
 use crate::storage::DurableUpdate;
 use crate::{
     account_metadata, account_reset,
@@ -319,6 +321,7 @@ pub struct ServerState {
     vaults: Cache<Account>,
     incarnations: account_reset::Incarnations,
     metadata_lock: Mutex<()>,
+    sharing_lock: Mutex<()>,
     transfer_budget: Budget,
     failures: Mutex<HashMap<String, Attempt>>,
     reports: Mutex<Vec<Report>>,
@@ -375,6 +378,12 @@ impl ServerState {
         }
     }
     fn authenticate(&self, headers: &HeaderMap) -> Result<Principal> {
+        if let Some(cap) = sharing::credential(headers) {
+            return sharing::principal(self, headers, cap);
+        }
+        self.authenticate_private(headers)
+    }
+    fn authenticate_private(&self, headers: &HeaderMap) -> Result<Principal> {
         if self.config.auth_mode == AuthMode::Proxy {
             let user = identity::proxy_identity(headers, &self.config.proxy_secret)?;
             let vault_id =
@@ -434,6 +443,9 @@ impl ServerState {
         }
     }
     fn account_directory(&self, id: &str) -> PathBuf {
+        if id.starts_with("share_") {
+            return self.config.data_dir.join("shared").join(id);
+        }
         if self.config.auth_mode == AuthMode::Password {
             self.config.data_dir.clone()
         } else {
@@ -443,6 +455,9 @@ impl ServerState {
     // Serialize first publication independently of the vault cache: session
     // checks can identify an existing vault even when its CRDT cannot open.
     fn record_account(&self, principal: &Principal, create: bool) -> Result<()> {
+        if principal.vault_id.starts_with("share_") {
+            return sharing::alive(self, &principal.vault_id);
+        }
         let _guard = self
             .metadata_lock
             .lock()
@@ -488,10 +503,30 @@ impl ServerState {
     ) -> Result<T> {
         let state = self.clone();
         tokio::task::spawn_blocking(move || {
+            // Collection must not race any shared operation, including opening
+            // storage, history capture, and blob uploads on an existing socket.
+            let shared_guard = if id.starts_with("share_") {
+                Some(
+                    state
+                        .sharing_lock
+                        .lock()
+                        .map_err(|_| Error::invalid("Sharing unavailable"))?,
+                )
+            } else {
+                None
+            };
+            sharing::alive(&state, &id)?;
             let account = state.account(&id)?;
             let mut account = account
                 .lock()
                 .map_err(|_| Error::invalid("Vault unavailable"))?;
+            if shared_guard.is_none() {
+                let _guard = state
+                    .sharing_lock
+                    .lock()
+                    .map_err(|_| Error::invalid("Sharing unavailable"))?;
+                sharing::recover(&state, &id, &mut account)?;
+            }
             account.run(state.time(), operation)
         })
         .await
@@ -504,10 +539,28 @@ impl ServerState {
     ) -> Result<T> {
         let state = self.clone();
         tokio::task::spawn_blocking(move || {
+            let _shared_guard = if principal.vault_id.starts_with("share_") {
+                Some(
+                    state
+                        .sharing_lock
+                        .lock()
+                        .map_err(|_| Error::invalid("Sharing unavailable"))?,
+                )
+            } else {
+                None
+            };
+            sharing::alive(&state, &principal.vault_id)?;
             let account = state.owned_account(&principal)?;
             let mut account = account
                 .lock()
                 .map_err(|_| Error::invalid("Vault unavailable"))?;
+            if _shared_guard.is_none() {
+                let _guard = state
+                    .sharing_lock
+                    .lock()
+                    .map_err(|_| Error::invalid("Sharing unavailable"))?;
+                sharing::recover(&state, &principal.vault_id, &mut account)?;
+            }
             account.run(state.time(), operation)
         })
         .await
@@ -569,6 +622,7 @@ impl ServerState {
                 );
             }
         }
+        sharing::collect(self)?;
         Ok(())
     }
 }
@@ -621,6 +675,7 @@ pub async fn start(config: Config) -> Result<Running> {
         vaults: Cache::default(),
         incarnations,
         metadata_lock: Mutex::new(()),
+        sharing_lock: Mutex::new(()),
         transfer_budget: Budget::default(),
         failures: Mutex::new(HashMap::new()),
         reports: Mutex::new(Vec::new()),
@@ -703,7 +758,7 @@ fn json_response(status: u16, value: Value) -> Response {
         .into_response()
 }
 
-pub(crate) const SYNC_PROTOCOL: &str = "4";
+pub(crate) const SYNC_PROTOCOL: &str = "5";
 
 fn client_update_required() -> Value {
     json!({
@@ -745,6 +800,9 @@ async fn handle_http(
     remote: SocketAddr,
     request: Request<Body>,
 ) -> Result<Response> {
+    if request.uri().path().starts_with("/api/shares/") {
+        return sharing::api(state, request).await;
+    }
     let query = request.uri().query().unwrap_or("").to_owned();
     let path = request.uri().path().trim_end_matches('/').to_owned();
     let method = request.method().clone();
@@ -763,6 +821,11 @@ async fn handle_http(
         let mut response = match state.authenticate(&headers) {
             Ok(p) => {
                 let mut value = state.session(&p);
+                if p.vault_id.starts_with("share_") {
+                    let (id, _, guest) = sharing::actor(&state, &headers)?;
+                    value["principalId"] = json!(id);
+                    value["guest"] = json!(guest);
+                }
                 // Browsers cannot read a rejected WebSocket handshake's body.
                 // Return its actionable reason during authenticated preflight,
                 // before opening any account storage. Headerless callers only
@@ -891,6 +954,14 @@ async fn handle_http(
         return Ok(response);
     }
     let principal = state.authenticate(&headers)?;
+    if principal.vault_id.starts_with("share_")
+        && (path.starts_with("/api/history-retention") || path == "/api/storage")
+    {
+        return Err(Error::request(
+            403,
+            "Storage preferences belong to your private collection.",
+        ));
+    }
     if path == "/api/diagnostics/startup" {
         state.bind(&headers, &principal)?;
         if method == Method::POST {
@@ -1297,6 +1368,7 @@ async fn upgrade(
     .map_err(|_| Error::request(503, "Could not open vault"))?;
     let tracker = state.connections.clone();
     Ok(ws
+        .protocols(["stow-shared"])
         .max_message_size(transfer::FRAME)
         .max_frame_size(transfer::FRAME)
         .on_upgrade(move |socket| {
@@ -1351,6 +1423,8 @@ async fn process_unit(
 ) -> Result<(Ids, bool)> {
     let client = client.clone();
     let time = state.time();
+    let sharing_state = state.clone();
+    let scope_id = vault_id.to_owned();
     state.with_account(vault_id.into(), move |account| {
         let mut catchup = catchup;
         let mut completed = completed;
@@ -1385,7 +1459,19 @@ async fn process_unit(
                 client.send(Kind::Sync, transfer::pack(&account.vault.sync(&vector), &account.vault.state_vector()));
             }
             Kind::Update => {
+                let private = !scope_id.starts_with("share_");
+                if private {
+                    let _guard = sharing_state.sharing_lock.lock().map_err(|_| Error::invalid("Sharing unavailable"))?;
+                    sharing::dirty(&sharing_state, &scope_id)?;
+                }
+                // Private account writes can run concurrently. Their durable
+                // dirty markers exclude collection until reconciliation finishes.
+                // Shared operations already hold the collection lock throughout.
                 let accepted = account.vault.accept(&unit.data, time)?;
+                if private {
+                    let _guard = sharing_state.sharing_lock.lock().map_err(|_| Error::invalid("Sharing unavailable"))?;
+                    sharing::reconcile_changes(&sharing_state, &scope_id, &account.vault.doc, Some(&accepted.touched))?;
+                }
                 if accepted.corrected() { client.update(&accepted); }
                 account.broadcast(&accepted, Some(connection_id));
                 if !completed { catchup.extend(accepted.touched.iter().cloned()); }

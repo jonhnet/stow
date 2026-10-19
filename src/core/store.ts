@@ -1,3 +1,5 @@
+import { collectionStore, landingReference, type SharingActions } from './collection-store';
+import { capability, type SharedReference } from './shared-note';
 import { SyncTransfer, SyncRejectionError, TransferError, unpackSync } from './sync-transfer';
 import { SYNC_PROTOCOL_VERSION } from './protocol-version';
 import { CURRENT_SCHEMA } from './current-schema';
@@ -11,7 +13,7 @@ import { TabSync, tabChannelName } from './tab-sync';
 import { Vault } from './vault';
 import { ImageStore, type ImageProgress } from './images';
 import { getPermanentDeletionBlobCandidates, PERMANENT_DELETION_ORIGIN } from './deletion';
-import { ACCOUNT_KEY, cachedAccount, parseAccount, rememberAccount, type Account, type AuthMode } from './account';
+import { ACCOUNT_KEY, assertAccountScope, cachedAccount, parseAccount, rememberAccount, type Account, type AuthMode } from './account';
 import type { Attachment, Label, Note, SyncStatus } from './types';
 import type { ArchivedHistoryCleanup, VaultStorage } from './storage-types';
 import type { HistoryBoundary, HistoryPage, SavedVersion, HistoryExport } from './server-history-types';
@@ -38,7 +40,7 @@ const encode = (bytes: Uint8Array) => {
 };
 const decode = (text: string) => Uint8Array.from(atob(text), c => c.charCodeAt(0));
 
-class StowStore {
+export class StowStore {
   // This document remains bound to one account for the entire page lifetime.
   vault = new Vault();
   private account?: Account;
@@ -62,6 +64,7 @@ class StowStore {
   private syncStopped = false;
   private syncRejection: SyncRejection | null = null;
   private updateReload?: IdleUpdateReload;
+  reloadBarrier?: { safe(): boolean; save(): Promise<void> };
   private isolation?: Promise<void>;
   private isolationComplete = true;
   private composing = false;
@@ -86,7 +89,7 @@ class StowStore {
   private replicationScheduled = false;
   private parked = false;
 
-  constructor() {
+  constructor(readonly shared?: SharedReference) {
     window.addEventListener('compositionstart', () => { this.composing = true; }, true);
     window.addEventListener('compositionend', () => { this.composing = false; }, true);
     this.refresh();
@@ -145,17 +148,37 @@ class StowStore {
       });
     });
     window.addEventListener('storage', event => {
-      if (event.key !== ACCOUNT_KEY && event.key !== null) return;
+      if (this.shared && event.key === ACCOUNT_KEY && this.account) {
+        const primary = cachedAccount();
+        if (primary && primary.vaultId !== this.account.principalId) this.block('The signed-in account changed. Reload before editing this shared note.');
+      }
+      if (event.key !== this.accountKey && event.key !== null) return;
       if (!this.account || this.access === 'blocked') return;
       try {
-        if (cachedAccount()?.vaultId !== this.account.vaultId) this.block('The account changed in another tab. Your edits remain in this account’s local vault. Reload to open the current account.');
+        if (this.cachedAccount()?.vaultId !== this.account.vaultId) this.block('The account changed in another tab. Your edits remain in this account’s local vault. Reload to open the current account.');
       } catch (error) { this.block(error instanceof Error ? error.message : 'Could not verify the account in this browser.'); }
     });
     // Also catch a proxy account change while the original WebSocket stays open.
     setInterval(() => { if (this.access === 'ready') void this.connect(); }, 15000);
-    void this.connect();
+    if (shared) {
+      void this.fetch('/api/shares/join', { method: 'POST' }).then(response => {
+        if (!response.ok) throw new Error('Could not join this shared note.');
+        return this.connect();
+      }).catch(() => { void this.connect(); });
+    } else void this.connect();
   }
 
+  private get accountKey() { return this.shared ? `stow-shared-account-${this.shared.id}` : ACCOUNT_KEY; }
+  private cachedAccount() { if (!this.shared) return cachedAccount(); const raw = localStorage.getItem(this.accountKey); const account = raw ? parseAccount(JSON.parse(raw)) : undefined; const primary = cachedAccount(); if (account && primary && account.principalId !== primary.vaultId) return undefined; return account; }
+  private rememberAccount(account: Account) { if (!this.shared) rememberAccount(account); else {
+      localStorage.setItem(this.accountKey, JSON.stringify(account));
+      if (!account.guest && account.principalId) rememberAccount({ user: account.user, vaultId: account.principalId, authMode: account.authMode });
+    } }
+  private fetch = (input: RequestInfo | URL, init: RequestInit = {}) => {
+    const headers = new Headers(init.headers);
+    if (this.shared) headers.set('X-Stow-Share', capability(this.shared));
+    return fetch(input, { ...init, headers });
+  };
   private fail(message: string) { this.error = message; this.refresh(); }
   private onUpdate = (update: Uint8Array, origin: unknown) => {
     this.updateDeletedImages();
@@ -256,7 +279,7 @@ class StowStore {
   private async session(): Promise<{ account: Account; rejection: SyncRejection | null }> {
     startupMark('session-start');
     let response: Response;
-    try { response = await fetch('/api/session', { cache: 'no-store', redirect: 'manual', headers: { 'X-Stow-Sync-Protocol': SYNC_PROTOCOL_VERSION, 'X-Stow-Schema': CURRENT_SCHEMA }, signal: AbortSignal.any([this.accountAbort.signal, AbortSignal.timeout(10000)]) }); }
+    try { response = await this.fetch('/api/session', { cache: 'no-store', redirect: 'manual', headers: { 'X-Stow-Sync-Protocol': SYNC_PROTOCOL_VERSION, 'X-Stow-Schema': CURRENT_SCHEMA }, signal: AbortSignal.any([this.accountAbort.signal, AbortSignal.timeout(10000)]) }); }
     catch { throw new NetworkError('Could not reach the server.'); }
     startupMark('session-response');
     startupCount('sessionStatus', response.status);
@@ -275,11 +298,13 @@ class StowStore {
     startupMark('session-json');
     const payload = value as { authenticated?: unknown; required?: unknown; authMode?: unknown; error?: unknown; syncRejection?: unknown } | null;
     const authMode = payload?.authMode === 'proxy' || payload?.authMode === 'password' ? payload.authMode : undefined;
+    if (this.shared && !response.ok && typeof payload?.error === 'string') throw new SessionError(payload.error, authMode);
     if (!response.ok) throw new SessionError(authMode === 'proxy' ? 'The proxy did not provide a trusted user identity. Sign in through the proxy, then reload Stow.' : 'The server could not verify your account. Reload after signing in.', authMode, response.status === 401 || response.status === 403);
     if (!payload || typeof payload.authenticated !== 'boolean' || typeof payload.required !== 'boolean' || !authMode) throw new SessionError('The server returned an invalid session. Reload after checking the server configuration.');
     if (!payload.authenticated) throw new SessionError(authMode === 'password' ? 'Sign in to open your notes.' : 'Sign in through the authentication proxy, then reload Stow.', authMode, true);
     try {
       const account = parseAccount(value);
+      assertAccountScope(account, this.shared?.id);
       startupAccount(account.vaultId);
       startupMark('account-verified');
       return { account, rejection: parseSyncRejection(payload.syncRejection) };
@@ -288,8 +313,10 @@ class StowStore {
   }
 
   private async openAccount(account: Account) {
+    assertAccountScope(account, this.shared?.id);
     startupMark('account-opening');
-    const databaseName = `stow-notes-${account.vaultId}`;
+    const namespace = account.principalId ? `${account.principalId}-${account.vaultId}` : account.vaultId;
+    const databaseName = `stow-notes-${namespace}`;
     const ownership = browserEditOwnership(databaseName);
     this.account = account;
     this.authMode = account.authMode;
@@ -301,8 +328,8 @@ class StowStore {
       }),
       undo: {
         manager: this.vault.undoManager, ownership,
-        preferredOwner: history.state?.stowUndo?.databaseName === databaseName ? history.state.stowUndo.owner : undefined,
-        onOwner: owner => history.replaceState({ ...history.state, stowUndo: { databaseName, owner } }, ''),
+        preferredOwner: history.state?.stowUndoScopes?.[databaseName] ?? (history.state?.stowUndo?.databaseName === databaseName ? history.state.stowUndo.owner : undefined),
+        onOwner: owner => history.replaceState({ ...history.state, stowUndo: { databaseName, owner }, stowUndoScopes: { ...history.state?.stowUndoScopes, [databaseName]: owner } }, ''),
       },
       edits: {
         owner: crypto.randomUUID(), ownership,
@@ -314,7 +341,7 @@ class StowStore {
       onPending: count => { this.localPending = count; if (count === 0) { this.localError = null; this.flushBroadcasts(); } this.refresh(); },
     });
     this.images = new ImageStore({
-      vaultId: account.vaultId,
+      vaultId: account.vaultId, databaseId: namespace, fetch: this.fetch,
       assertAccount: () => {
         if (this.account?.vaultId !== account.vaultId || this.accountAbort.signal.aborted || this.access === 'blocked' || this.access === 'locked') {
           throw new Error('The active account changed. Reload Stow before accessing images.');
@@ -323,7 +350,7 @@ class StowStore {
       isOnline: () => this.access === 'ready' && this.status === 'online',
       signal: this.accountAbort.signal,
       onAuthError: message => {
-        try { localStorage.removeItem(ACCOUNT_KEY); }
+        try { localStorage.removeItem(this.accountKey); }
         catch { this.error = 'Browser storage could not clear the previous account. Restore browser storage before reopening Stow.'; }
         this.block(message);
       },
@@ -338,7 +365,7 @@ class StowStore {
     // applied the local log, then perform the initial bookkeeping explicitly.
     this.vault.doc.on('update', this.onUpdate);
     this.updateDeletedImages();
-    this.channel = new BroadcastChannel(tabChannelName(account.vaultId));
+    this.channel = new BroadcastChannel(tabChannelName(namespace));
     const tabs = new TabSync(this.vault.doc, message => this.broadcastAfterSave(message));
     this.channel.addEventListener('message', event => {
       if (this.access !== 'ready' || this.syncStopped) return;
@@ -404,15 +431,15 @@ class StowStore {
       const { account, rejection } = await this.session();
       if (this.accountAbort.signal.aborted || this.parked) return;
       this.authMode = account.authMode;
-      if (this.account && this.account.vaultId !== account.vaultId) {
-        rememberAccount(account);
+      if (this.account && (this.account.vaultId !== account.vaultId || this.account.principalId !== account.principalId)) {
+        this.rememberAccount(account);
         this.block('Your signed-in account changed. Your edits remain in the previous account’s local vault. Reload to open the current account.');
         return;
       }
       // A socket may reject sync while this session request is in flight.
       // Its late approval must not restart sync or reset the update notice.
       if (this.syncStopped) return;
-      rememberAccount(account);
+      this.rememberAccount(account);
       if (rejection) {
         // Authenticate first, but do not open an incompatible cached vault on
         // startup. An already open vault drains pending edits before closing.
@@ -429,7 +456,7 @@ class StowStore {
       this.status = 'connecting';
       this.refresh();
       startupMark('socket-start');
-      const socket = new WebSocket(`${location.protocol === 'https:' ? 'wss:' : 'ws:'}//${location.host}/sync?schema=${CURRENT_SCHEMA}&protocol=${SYNC_PROTOCOL_VERSION}&vaultId=${encodeURIComponent(account.vaultId)}`);
+      const socket = new WebSocket(`${location.protocol === 'https:' ? 'wss:' : 'ws:'}//${location.host}/sync?schema=${CURRENT_SCHEMA}&protocol=${SYNC_PROTOCOL_VERSION}&vaultId=${encodeURIComponent(account.vaultId)}`, this.shared ? ['stow-shared', capability(this.shared)] : []);
       this.socket = socket; socket.binaryType = 'arraybuffer';
       const transfer = new SyncTransfer(socket, {
         onFailure: error => {
@@ -508,7 +535,7 @@ class StowStore {
         this.closeSocket();
         if (!this.account) {
           try {
-            const account = cachedAccount();
+            const account = this.cachedAccount();
             if (!account) { this.accessMessage = 'Connect to the server once to identify and download your vault.'; this.status = 'offline'; this.refresh(); this.scheduleReconnect(); return; }
             await this.openAccount(account);
           } catch (storageError) {
@@ -522,7 +549,7 @@ class StowStore {
         this.status = 'offline'; this.refresh(); this.scheduleReconnect();
       } else {
         // An HTTP/authentication/format failure is not permission to open a cached vault.
-        try { localStorage.removeItem(ACCOUNT_KEY); }
+        try { localStorage.removeItem(this.accountKey); }
         catch { this.error = 'Browser storage could not clear the previous account. Restore browser storage before reopening Stow.'; }
         if (error instanceof SessionError && error.authMode) this.authMode = error.authMode;
         const message = error instanceof Error ? error.message : 'Could not verify your account.';
@@ -565,8 +592,8 @@ class StowStore {
     }
     this.updateReload?.stop(); this.updateReload = undefined;
     if (rejection.action === 'reload') this.updateReload = new IdleUpdateReload(account.vaultId, rejection.target, {
-      safe: () => this.isolationComplete && !this.parked && !this.composing && this.access !== 'blocked' && this.access !== 'locked' && this.localPending === 0 && this.imageWrites === 0 && !this.localError,
-      save: () => this.saveBeforeReload(),
+      safe: () => (this.reloadBarrier?.safe() ?? true) && this.isolationComplete && !this.parked && !this.composing && this.access !== 'blocked' && this.access !== 'locked' && this.localPending === 0 && this.imageWrites === 0 && !this.localError,
+      save: () => this.reloadBarrier?.save() ?? this.saveBeforeReload(),
       reload: () => location.reload(),
       failed: () => this.refresh(),
     });
@@ -580,12 +607,12 @@ class StowStore {
 
   async login(password: string) {
     if (this.authMode !== 'password' || this.account) throw new Error('Reload Stow after signing in to the current account.');
-    const response = await fetch('/api/login', { method: 'POST', redirect: 'manual', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ password }) });
+    const response = await this.fetch('/api/login', { method: 'POST', redirect: 'manual', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ password }) });
     if (!response.ok) throw new Error(response.status === 429 ? 'Too many attempts. Please try again shortly.' : 'That password did not work.');
     await this.connect();
   }
 
-  private async saveBeforeReload() {
+  async saveBeforeReload() {
     try {
       if (this.isolation) { await this.isolation; return; }
       this.vault.finishEdit();
@@ -599,8 +626,8 @@ class StowStore {
   async reloadAccount() {
     if (this.updateReload) { await this.updateReload.attempt(); return; }
     try {
-      await this.saveBeforeReload();
-      if (this.localPending === 0 && this.imageWrites === 0 && !this.localError) location.reload();
+      await (this.reloadBarrier?.save() ?? this.saveBeforeReload());
+      if ((this.reloadBarrier?.safe() ?? true) && this.localPending === 0 && this.imageWrites === 0 && !this.localError) location.reload();
     } catch { /* saveBeforeReload reports the failure and retains local edits. */ }
   }
 
@@ -609,7 +636,7 @@ class StowStore {
     return this.account;
   }
 
-  private async whenSynchronized() {
+  async whenSynchronized() {
     this.requireAccount();
     this.vault.finishEdit();
     await this.persistence!.whenDurable();
@@ -631,9 +658,9 @@ class StowStore {
     });
   }
 
-  private async storageRequest<T>(path: string, method = 'GET', body?: unknown): Promise<T> {
+  async storageRequest<T>(path: string, method = 'GET', body?: unknown): Promise<T> {
     const account = this.requireAccount();
-    const response = await fetch(path, {
+    const response = await this.fetch(path, {
       method, cache: 'no-store', redirect: 'manual',
       headers: { 'X-Stow-Vault': account.vaultId, ...(body === undefined ? {} : { 'Content-Type': 'application/json' }) },
       ...(body === undefined ? {} : { body: JSON.stringify(body) }),
@@ -781,6 +808,18 @@ class StowStore {
     }
   }
 
+  verifiedAccountId() {
+    if (!this.account || this.access !== 'ready') throw new Error('The account is not verified.');
+    return this.account.principalId ?? this.account.vaultId;
+  }
+
+  async exportDocument(history: boolean) {
+    if (history) { this.requireHistoryConnection(); await this.whenSynchronized(); }
+    return { scope: this.shared ?? null, accountId: this.account?.principalId ?? this.account?.vaultId,
+      notes: this.vault.getNotes(), crdt: encode(Y.encodeStateAsUpdate(this.vault.doc)),
+      ...(history ? { history: await this.storageRequest<HistoryExport>('/api/history/export') } : {}) };
+  }
+
   exportCurrentNotes() {
     this.downloadExport({ format: 'stow-current-export-v1', exportedAt: new Date().toISOString(), notes: this.vault.getNotes(), crdt: encode(Y.encodeStateAsUpdate(this.vault.doc)) });
   }
@@ -793,7 +832,7 @@ class StowStore {
     this.downloadExport({ format: 'stow-export-v3', exportedAt: new Date().toISOString(), notes: this.vault.getNotes(), history, crdt: encode(Y.encodeStateAsUpdate(this.vault.doc)) });
   }
 
-  private downloadExport(data: unknown) {
+  downloadExport(data: unknown) {
     const url = URL.createObjectURL(new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' }));
     const a = document.createElement('a');
     a.href = url; a.download = `stow-${new Date().toISOString().slice(0, 10)}.json`; a.click();
@@ -803,6 +842,6 @@ class StowStore {
 
 startupMark('store-constructing');
 /** Public UI contract, also implemented by the explicitly selected static demo. */
-export type AppStore = Pick<StowStore, keyof StowStore>;
-export const store = new StowStore();
+export type AppStore = Omit<Pick<StowStore, keyof StowStore>, 'whenSynchronized' | 'storageRequest' | 'shared' | 'exportDocument' | 'downloadExport' | 'verifiedAccountId' | 'saveBeforeReload' | 'reloadBarrier'> & SharingActions;
+export const store: AppStore = collectionStore(new StowStore(landingReference()), ref => new StowStore(ref));
 export function useStow() { return useSyncExternalStore(store.subscribe, store.getSnapshot); }

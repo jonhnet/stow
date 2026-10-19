@@ -1,6 +1,6 @@
 //! Native regressions for the storage, policy and HTTP contracts formerly tested
 //! through TypeScript adapters. Fixtures use the same UTF-16 CRDT schema as Yjs.
-use crate::{crdt::*, history_state, storage::Vault};
+use crate::{crdt::*, history_state, server::SYNC_PROTOCOL, storage::Vault};
 use serde_json::{Value, json};
 use std::{fs, path::Path};
 use tempfile::TempDir;
@@ -127,3 +127,5 @@ impl Fixture {
         field(&self.vault.doc.transact(), "notes", id, "body")
     }
 }
+
+mod sharing;
