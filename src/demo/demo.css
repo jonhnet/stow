@@ -2,7 +2,10 @@
 .demo body{padding-top:var(--demo-notice-height)}
 .demo .topbar{top:var(--demo-notice-height)}
 .demo .sidebar,.demo .mobile-nav-backdrop{top:calc(var(--demo-notice-height) + var(--demo-topbar-height))}
-.demo .modal-backdrop,.demo .image-viewer-backdrop{top:var(--demo-notice-height)}
+/* The editor's viewport hook sets its origin and height. Keep the notice clear
+   using inner spacing, including when the phone editor fills that viewport. */
+.demo .modal-backdrop{padding-top:var(--demo-notice-height)}
+.demo .image-viewer-backdrop{top:var(--demo-notice-height)}
 .demo .image-viewer{max-height:calc(100dvh - var(--demo-notice-height) - 48px)}
 .demo .sync-demo{color:#785616}
 .demo-notice{position:fixed;inset:0 0 auto;z-index:150;background:#fff3cd;color:#513c10;border-bottom:1px solid #d8b96e;padding:10px 20px;box-shadow:0 2px 5px #0000000a}

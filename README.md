@@ -5,6 +5,18 @@ It features a draggable overview, markdown text body, checklists, images, links,
 It synchronizes between your browsers and phone and supports offline
 editing. It can be installed as an app (PWA) on Android.
 
+Installed apps can refresh notes while closed when the browser grants Periodic
+Background Sync permission. Stow requests opportunities at least an hour apart;
+the browser chooses the actual timing and may not run them. Settings shows
+eligibility and the last successful sync on this device. Background refresh
+downloads note content and metadata, preserves pending local edits and Undo, and
+requires a still-valid sign-in. Image fetching and uploading local edits happen
+when Stow is open. Before relying on a newly edited note offline, open Stow on that
+device while connected and check that the note has arrived.
+
+The [Android background-sync tests](tests/android/README.md) distinguish forced
+worker execution from observation of the browser's real scheduling.
+
 [Try the live demo](https://stow-demo.tech.jonh.net/).
 
 ## Writing and formatting

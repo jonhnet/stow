@@ -25,7 +25,7 @@ type Drag = {
   y: number;
   moved: boolean;
 };
-type Preview = { itemId: string; text: string; x: number; y: number; width: number; target: DropTarget | null };
+type Preview = { itemId: string; parentId: string | null; count: number; text: string; x: number; y: number; width: number; target: DropTarget | null };
 type FocusRequest = { id: string; kind: 'text' | 'grip'; selection?: { start: number; end: number; direction: 'forward' | 'backward' | 'none' } };
 
 function scrollContainer(element: HTMLElement): HTMLElement {
@@ -54,13 +54,17 @@ function childDepth(drag: Drag) {
   return drag.x > depthBoundary(drag);
 }
 
+function isCarriedRow(drag: Drag, row: HTMLElement) {
+  return row.dataset.checkRow === drag.itemId || (drag.parentId === null && row.dataset.rootId === drag.itemId);
+}
+
 /** Resolve a literal row slot; a top-level drop can split a group between children. */
 function dropTarget(drag: Drag): DropTarget | null {
   if (!drag.group.isConnected) return null;
   const bounds = drag.group.getBoundingClientRect();
   const visible = viewport(drag.scroller);
   if (drag.x < bounds.left || drag.x > bounds.right || drag.y < Math.max(bounds.top, visible.top) || drag.y > Math.min(bounds.bottom, visible.bottom)) return null;
-  const rows = [...drag.group.querySelectorAll<HTMLElement>('[data-check-row]')].filter(row => row.dataset.checkRow !== drag.itemId);
+  const rows = [...drag.group.querySelectorAll<HTMLElement>('[data-check-row]')].filter(row => !isCarriedRow(drag, row));
   if (!rows.length) return null;
   let slot = rows.findIndex(row => { const box = row.getBoundingClientRect(); return drag.y < box.top + box.height / 2; });
   if (slot < 0) slot = rows.length;
@@ -91,7 +95,8 @@ const ChecklistRow = memo(function ChecklistRow({ item, root, disabled, preview,
     const target = preview?.target?.markerId === item.id ? preview.target : undefined;
     const insertion = target ? `insert-${target.markerPlacement}` : '';
     const style = target ? { '--drop-offset': `${(target.parentId ? INDENT : 0) - (parentId ? INDENT : 0)}px` } as CSSProperties : undefined;
-    return <div key={item.id} role="listitem" data-check-row={item.id} data-root-id={root.id} data-parent-id={parentId} style={style} className={`editor-check-row ${parentId ? 'is-child' : ''} ${item.checked ? 'is-checked' : ''} ${preview?.itemId === item.id ? 'drag-source' : ''} ${insertion}`}>
+    const carried = preview?.itemId === item.id || (preview?.parentId === null && preview.itemId === root.id);
+    return <div key={item.id} role="listitem" data-check-row={item.id} data-root-id={root.id} data-parent-id={parentId} style={style} className={`editor-check-row ${parentId ? 'is-child' : ''} ${item.checked ? 'is-checked' : ''} ${carried ? 'drag-source' : ''} ${insertion}`}>
       {!disabled && <button type="button" className="item-drag-handle" aria-label={`Reorder ${item.text || 'list item'}`} aria-describedby={`${item.id}-nesting-help`} aria-keyshortcuts="ArrowUp ArrowDown ArrowLeft ArrowRight" title="Drag to reorder or nest. Arrow keys move, indent, or outdent." onPointerDown={event => actions.current.start(event, item)} onPointerMove={event => actions.current.move(event)} onPointerUp={event => actions.current.end(event)} onPointerCancel={event => actions.current.cancel(event)} onLostPointerCapture={event => actions.current.cancel(event)} onClick={event => { event.preventDefault(); event.stopPropagation(); }} onKeyDown={event => actions.current.gripKey(event, item)}><GripVertical size={17} /></button>}
       <input type="checkbox" checked={item.checked} disabled={disabled} aria-label={`Complete ${item.text || 'list item'}`} onChange={() => store.vault.toggleItem(item.id)} />
       <MarkdownField data-note-field inline className="item-text" data-item-id={item.id} value={item.text} disabled={disabled} aria-label="List item text" onChange={event => { const value = event.currentTarget.value; store.vault.setItemText(item.id, value); }} onKeyDown={event => actions.current.textKey(event, item)} />
@@ -136,8 +141,11 @@ function EditorChecklist({ note, disabled, onAddItem }: { note: Note; disabled: 
 
   const updatePreview = (drag: Drag) => {
     if (!drag.moved) return;
+    // A root also carries its completed children, even while that section is collapsed.
+    const family = drag.parentId === null ? checklistGroups(noteRef.current.items).find(group => group.root.id === drag.itemId) : undefined;
     setPreview({
-      itemId: drag.itemId, text: drag.text,
+      itemId: drag.itemId, parentId: drag.parentId, text: drag.text,
+      count: family ? 1 + family.children.length : 1,
       x: drag.x, y: drag.y,
       width: Math.min(340, drag.group.getBoundingClientRect().width),
       target: dropTarget(drag),
@@ -295,7 +303,7 @@ function EditorChecklist({ note, disabled, onAddItem }: { note: Note; disabled: 
     {!disabled && <NewChecklistItem onAdd={onAddItem} onEdit={(id, text) => store.vault.setItemText(id, text)} onFocus={id => setFocusRequest({ id, kind: 'text' })} onPendingChange={setComposingItemId} />}
     {completedCount > 0 && <div className="completed-items"><button type="button" className="completed-toggle" onClick={() => setShowCompleted(!showCompleted)}>{showCompleted ? <ChevronDown size={16} /> : <ChevronRight size={16} />}{completedCount} completed item{completedCount === 1 ? '' : 's'}</button>{showCompleted && <div className="checklist-group" role="list" aria-label="Completed checklist items" data-check-group="checked">{completed.map(renderRow)}</div>}</div>}
     <span className="sr-only" role="status" aria-live="polite" aria-atomic="true">{announcement}</span>
-    {preview && createPortal(<div className={`check-drag-preview ${preview.target ? '' : 'invalid-drop'} ${preview.target?.parentId ? 'nested-drop' : ''}`} aria-hidden="true" style={{ width: preview.width, left: Math.max(8, Math.min(preview.x + 14, window.innerWidth - preview.width - 8)), top: Math.max(8, Math.min(preview.y + 12, window.innerHeight - 60)) }}><GripVertical size={16} /><div><span>{preview.text}</span>{preview.target?.parentId && <small>Nested item</small>}</div></div>, document.body)}
+    {preview && createPortal(<div className={`check-drag-preview ${preview.target ? '' : 'invalid-drop'} ${preview.target?.parentId ? 'nested-drop' : ''}`} aria-hidden="true" style={{ width: preview.width, left: Math.max(8, Math.min(preview.x + 14, window.innerWidth - preview.width - 8)), top: Math.max(8, Math.min(preview.y + 12, window.innerHeight - 60)) }}><GripVertical size={16} /><div><span>{preview.text}</span>{(preview.count > 1 || preview.target?.parentId) && <small>{preview.count > 1 ? `${preview.count} ${preview.target?.parentId ? 'nested items' : 'items'}` : 'Nested item'}</small>}</div></div>, document.body)}
   </div>;
 }
 

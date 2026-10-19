@@ -240,49 +240,101 @@ test('completion partitions mixed families by checkedness and deleting a parent 
   await expect(dialog.locator('.is-child')).toHaveCount(2);
 });
 
-test('dragging a parent moves only that row and leaves its children beneath the preceding root', async ({ page, browser }) => {
-  const dialog = await createList(page, 'Single row drag', ['A', 'B', 'C', 'D', 'E']);
+test('dragging a parent carries its children, syncs, and undoes as one move', async ({ page, browser }) => {
+  const dialog = await createList(page, 'Group drag', ['A', 'B', 'C', 'D', 'E', 'F', 'G']);
   await indent(page, dialog, 'B');
-  await indent(page, dialog, 'D');
+  for (const text of ['D', 'E', 'F']) await indent(page, dialog, text);
   const aId = (await row(dialog, 'A').getAttribute('data-check-row'))!;
   const cId = (await row(dialog, 'C').getAttribute('data-check-row'))!;
   const remote = await browser.newContext();
   try {
     const other = await remote.newPage();
     await other.goto('/');
-    const card = other.getByRole('article', { name: 'Open note: Single row drag', exact: true });
-    await expect(card.locator('[data-check-depth="1"]')).toHaveCount(2);
-    await drag(page, grip(dialog, 'C'), row(dialog, 'E'), 'root', false);
-    await expect(dialog.locator('.drag-source')).toHaveCount(1);
-    await expect(row(dialog, 'C')).toHaveClass(/drag-source/);
-    await expect(page.locator('.check-drag-preview')).toHaveText('C');
-    expect(await order(dialog)).toEqual(['A', 'B', 'C', 'D', 'E']);
-    await page.screenshot({ path: test.info().outputPath('single-parent-row-drag.png') });
+    const card = other.getByRole('article', { name: 'Open note: Group drag', exact: true });
+    await expect(card.locator('[data-check-depth="1"]')).toHaveCount(4);
+    await drag(page, grip(dialog, 'C'), row(dialog, 'G'), 'root', false);
+    await expect(dialog.locator('.drag-source')).toHaveCount(4);
+    for (const text of ['C', 'D', 'E', 'F']) await expect(row(dialog, text)).toHaveClass(/drag-source/);
+    await expect(page.locator('.check-drag-preview')).toHaveText('C4 items');
+    expect(await order(dialog)).toEqual(['A', 'B', 'C', 'D', 'E', 'F', 'G']);
+    await page.screenshot({ path: test.info().outputPath('parent-group-drag.png') });
     await page.mouse.up();
-    await expect.poll(() => order(dialog)).toEqual(['A', 'B', 'D', 'E', 'C']);
+    await expect.poll(() => order(dialog)).toEqual(['A', 'B', 'G', 'C', 'D', 'E', 'F']);
     await expect(row(dialog, 'C')).not.toHaveClass(/is-child/);
-    for (const text of ['B', 'D']) await expect(row(dialog, text)).toHaveAttribute('data-parent-id', aId);
-    await expect.poll(() => card.locator('.check-row span').allTextContents()).toEqual(['A', 'B', 'D', 'E', 'C']);
-    await expect(card.locator('[data-check-depth="1"]')).toHaveCount(2);
+    await expect(row(dialog, 'B')).toHaveAttribute('data-parent-id', aId);
+    for (const text of ['D', 'E', 'F']) await expect(row(dialog, text)).toHaveAttribute('data-parent-id', cId);
+    await expect.poll(() => card.locator('.check-row span').allTextContents()).toEqual(['A', 'B', 'G', 'C', 'D', 'E', 'F']);
+    await expect(card.locator('[data-check-depth="1"]')).toHaveCount(4);
     await page.keyboard.press('Control+z');
-    await expect.poll(() => order(dialog)).toEqual(['A', 'B', 'C', 'D', 'E']);
-    await expect(row(dialog, 'D')).toHaveAttribute('data-parent-id', cId);
+    await expect.poll(() => order(dialog)).toEqual(['A', 'B', 'C', 'D', 'E', 'F', 'G']);
+    for (const text of ['D', 'E', 'F']) await expect(row(dialog, text)).toHaveAttribute('data-parent-id', cId);
     await page.keyboard.press('Control+Shift+z');
-    await expect.poll(() => order(dialog)).toEqual(['A', 'B', 'D', 'E', 'C']);
-    await expect(row(dialog, 'D')).toHaveAttribute('data-parent-id', aId);
+    await expect.poll(() => order(dialog)).toEqual(['A', 'B', 'G', 'C', 'D', 'E', 'F']);
+    for (const text of ['D', 'E', 'F']) await expect(row(dialog, text)).toHaveAttribute('data-parent-id', cId);
   } finally { await remote.close(); }
 });
 
-test('dragging the first root promotes its first remaining child and moves the root alone', async ({ page }) => {
+test('dropping a parent inside a sublist makes all four carried rows siblings at the marked slot', async ({ page }) => {
+  const dialog = await createList(page, 'Flatten a dragged group', ['Parent', 'One', 'Two', 'Three', 'Target', 'Before', 'After', 'Last']);
+  for (const text of ['One', 'Two', 'Three', 'Before', 'After']) await indent(page, dialog, text);
+  const parentId = (await row(dialog, 'Parent').getAttribute('data-check-row'))!;
+  const targetId = (await row(dialog, 'Target').getAttribute('data-check-row'))!;
+  const original = ['Parent', 'One', 'Two', 'Three', 'Target', 'Before', 'After', 'Last'];
+  await drag(page, grip(dialog, 'Parent'), row(dialog, 'Before'), 'nested', false);
+  await expect(dialog.locator('.drag-source')).toHaveCount(4);
+  await expect(row(dialog, 'Before')).toHaveClass(/insert-after/);
+  await expect(dialog.locator('.drag-source.insert-before, .drag-source.insert-after')).toHaveCount(0);
+  await expect(page.locator('.check-drag-preview')).toHaveText('Parent4 nested items');
+  await page.keyboard.press('Escape'); await page.mouse.up();
+  await expect(dialog).toBeVisible();
+  await expect(dialog.locator('.drag-source')).toHaveCount(0);
+  expect(await order(dialog)).toEqual(original);
+  await drag(page, grip(dialog, 'Parent'), row(dialog, 'Before'), 'nested');
+  const moved = ['Target', 'Before', 'Parent', 'One', 'Two', 'Three', 'After', 'Last'];
+  await expect.poll(() => order(dialog)).toEqual(moved);
+  for (const text of ['Before', 'Parent', 'One', 'Two', 'Three', 'After']) await expect(row(dialog, text)).toHaveAttribute('data-parent-id', targetId);
+  await page.keyboard.press('Control+z');
+  await expect.poll(() => order(dialog)).toEqual(original);
+  await expect(row(dialog, 'Parent')).not.toHaveClass(/is-child/);
+  for (const text of ['One', 'Two', 'Three']) await expect(row(dialog, text)).toHaveAttribute('data-parent-id', parentId);
+  await page.keyboard.press('Control+Shift+z');
+  await expect.poll(() => order(dialog)).toEqual(moved);
+  for (const text of ['Parent', 'One', 'Two', 'Three']) await expect(row(dialog, text)).toHaveAttribute('data-parent-id', targetId);
+});
+
+for (const depth of ['root', 'nested'] as const) test(`a ${depth} group drop also carries children hidden in the collapsed completed section`, async ({ page }) => {
+  const dialog = await createList(page, `Carry completed children ${depth}`, ['Parent', 'One', 'Two', 'Three', 'Target', 'Before', 'After', 'Last']);
+  for (const text of ['One', 'Two', 'Three', 'Before', 'After']) await indent(page, dialog, text);
+  const parentId = (await row(dialog, 'Parent').getAttribute('data-check-row'))!;
+  const targetId = (await row(dialog, 'Target').getAttribute('data-check-row'))!;
+  const childId = (await row(dialog, 'Two').getAttribute('data-check-row'))!;
+  await row(dialog, 'Two').getByRole('checkbox').check();
+  await dialog.getByRole('button', { name: '1 completed item', exact: true }).click();
+  await expect(row(dialog, 'Two')).toHaveCount(0);
+  await drag(page, grip(dialog, 'Parent'), row(dialog, 'Before'), depth, false);
+  await expect(dialog.locator('.drag-source')).toHaveCount(3);
+  await expect(page.locator('.check-drag-preview')).toHaveText(`Parent4 ${depth === 'nested' ? 'nested items' : 'items'}`);
+  await page.mouse.up();
+  await expect.poll(() => order(dialog)).toEqual(['Target', 'Before', 'Parent', 'One', 'Three', 'After', 'Last']);
+  await expect(row(dialog, 'Two')).toHaveCount(0);
+  await dialog.getByRole('button', { name: '1 completed item', exact: true }).click();
+  await expect(row(dialog, 'Two')).toHaveAttribute('data-check-row', childId);
+  for (const text of ['One', 'Two', 'Three']) await expect(row(dialog, text)).toHaveAttribute('data-parent-id', depth === 'nested' ? targetId : parentId);
+  await expect(row(dialog, 'Two').getByRole('checkbox')).toBeChecked();
+  await page.keyboard.press('Control+z');
+  await expect.poll(() => order(dialog)).toEqual(['Parent', 'One', 'Three', 'Target', 'Before', 'After', 'Last', 'Two']);
+  await expect(row(dialog, 'Two')).toHaveAttribute('data-parent-id', parentId);
+  await expect(row(dialog, 'Two').getByRole('checkbox')).toBeChecked();
+});
+
+test('dragging the first root carries its children without promoting or leaving any behind', async ({ page }) => {
   const dialog = await createList(page, 'Move first root', ['A', 'B', 'C', 'D']);
   await indent(page, dialog, 'B');
   await indent(page, dialog, 'C');
   const aId = (await row(dialog, 'A').getAttribute('data-check-row'))!;
-  const bId = (await row(dialog, 'B').getAttribute('data-check-row'))!;
   await drag(page, grip(dialog, 'A'), row(dialog, 'D'));
-  await expect.poll(() => order(dialog)).toEqual(['B', 'C', 'D', 'A']);
-  await expect(row(dialog, 'B')).not.toHaveClass(/is-child/);
-  await expect(row(dialog, 'C')).toHaveAttribute('data-parent-id', bId);
+  await expect.poll(() => order(dialog)).toEqual(['D', 'A', 'B', 'C']);
+  for (const text of ['B', 'C']) await expect(row(dialog, text)).toHaveAttribute('data-parent-id', aId);
   await expect(row(dialog, 'A')).not.toHaveClass(/is-child/);
   await page.keyboard.press('Control+z');
   await expect.poll(() => order(dialog)).toEqual(['A', 'B', 'C', 'D']);
@@ -353,7 +405,7 @@ test('touch horizontal gestures nest and outdent long wrapping text without togg
   } finally { await phone.close(); }
 });
 
-test('a concurrent new child stays behind while the parent drag remains active', async ({ page, browser }) => {
+test('a concurrent new child joins the visible parent drag and moves with the group', async ({ page, browser }) => {
   const dialog = await createList(page, 'Concurrent drag membership', ['Parent', 'Child', 'Candidate', 'Other']);
   await indent(page, dialog, 'Child');
   const remote = await browser.newContext();
@@ -368,11 +420,11 @@ test('a concurrent new child stays behind while the parent drag remains active',
     await indent(other, otherDialog, 'Candidate');
     await expect(row(dialog, 'Candidate')).toHaveClass(/is-child/);
     await expect(page.locator('.check-drag-preview')).toBeVisible();
-    await expect(dialog.locator('.drag-source')).toHaveCount(1);
+    await expect(dialog.locator('.drag-source')).toHaveCount(3);
+    await expect(page.locator('.check-drag-preview')).toHaveText('Parent3 items');
     await page.mouse.up();
-    await expect.poll(() => order(dialog)).toEqual(['Child', 'Candidate', 'Other', 'Parent']);
-    await expect(row(dialog, 'Child')).not.toHaveClass(/is-child/);
-    await expect(row(dialog, 'Candidate')).toHaveAttribute('data-parent-id', (await row(dialog, 'Child').getAttribute('data-check-row'))!);
+    await expect.poll(() => order(dialog)).toEqual(['Other', 'Parent', 'Child', 'Candidate']);
+    for (const text of ['Child', 'Candidate']) await expect(row(dialog, text)).toHaveAttribute('data-parent-id', (await row(dialog, 'Parent').getAttribute('data-check-row'))!);
     await expect(row(dialog, 'Parent')).not.toHaveClass(/is-child/);
   } finally { await remote.close(); }
 });

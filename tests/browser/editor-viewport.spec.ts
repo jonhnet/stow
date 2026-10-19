@@ -36,6 +36,8 @@ test('open note fits a keyboard-sized visual viewport and follows a caret in lon
   const originalHeight = (await dialog.boundingBox())!.height;
   const layoutHeight = await page.evaluate(() => innerHeight);
   const pageScroll = await page.evaluate(() => scrollY);
+  await expect(dialog).toBeFocused();
+  await dialog.getByRole('textbox', { name: 'Note title', exact: true }).tap();
   await keyboardViewport(page, 380, 64);
   await expect.poll(() => dialog.evaluate(element => {
     const rect = element.getBoundingClientRect();

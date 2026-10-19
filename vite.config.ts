@@ -18,26 +18,17 @@ export default defineConfig({
   envDir: workspaceDir,
   cacheDir: path.join(buildDir, 'vite'),
   build: { outDir: distDir, emptyOutDir: true },
+  // Keep the worker self-contained, with a root URL for its root scope.
+  worker: { rollupOptions: { output: { entryFileNames: chunk => chunk.name === 'service-worker' ? 'sw.js' : 'assets/[name]-[hash].js' } } },
   plugins: [react(), devHttpDiagnostics(path.join(buildDir, 'startup-http.json')), {
   name: 'stow-offline-shell',
   generateBundle(_options, bundle) {
     const assets = ['/', '/index.html', '/icon.svg', '/icon-192.png', '/icon-512.png', '/icon-maskable-512.png', '/manifest.webmanifest', ...Object.keys(bundle).filter(name => !name.endsWith('.map')).map(name => '/' + name)];
-    this.emitFile({ type: 'asset', fileName: 'sw.js', source: `
-const CACHE = 'stow-shell-${Date.now()}';
-const ASSETS = ${JSON.stringify(assets)};
-self.addEventListener('install', event => event.waitUntil(caches.open(CACHE).then(cache => cache.addAll(ASSETS))));
-self.addEventListener('activate', event => event.waitUntil(caches.keys().then(keys => Promise.all(keys.filter(k => k.startsWith('stow-shell-') && k !== CACHE).map(k => caches.delete(k)))).then(() => self.clients.claim())));
-self.addEventListener('fetch', event => {
-  const url = new URL(event.request.url);
-  if (event.request.method !== 'GET' || url.origin !== self.location.origin || url.pathname.startsWith('/api/') || url.pathname === '/sync') return;
-  if (event.request.mode === 'navigate') {
-    event.respondWith(fetch(event.request).catch(() => caches.match('/index.html')));
-  } else if (ASSETS.includes(url.pathname)) {
-    event.respondWith(caches.match(event.request).then(cached => cached || fetch(event.request)));
+    const worker = bundle['sw.js'];
+    if (!worker || worker.type !== 'asset' || typeof worker.source !== 'string') throw new Error('Missing service worker bundle.');
+    worker.source = worker.source.replace('__STOW_ASSETS__', JSON.stringify(assets)).replace('__STOW_CACHE__', JSON.stringify(`stow-shell-${Date.now()}`));
   }
-});
-` });
-  }
+
 }], server: { strictPort: true, allowedHosts: publicOrigin ? [publicOrigin.hostname] : [],
   // An explicit client port keeps hot reload on the public origin and disables
   // Vite's direct-connection fallback to localhost on the browsing device.

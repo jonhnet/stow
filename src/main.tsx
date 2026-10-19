@@ -2,6 +2,7 @@ import React from 'react';
 import { createRoot } from 'react-dom/client';
 import './styles.css';
 import './install';
+import serviceWorkerUrl from './service-worker?worker&url';
 import { startStartupDiagnostics, startupMark } from './core/startup-diagnostics';
 
 startStartupDiagnostics();
@@ -26,6 +27,6 @@ if (!window.isSecureContext) {
     startupMark('app-import-end');
     startupMark('react-render-requested');
     root.render(<React.StrictMode><App /></React.StrictMode>);
-    if (import.meta.env.PROD) void navigator.serviceWorker.register('/sw.js').catch(console.error);
+    if (import.meta.env.PROD) void navigator.serviceWorker.register(serviceWorkerUrl).catch(console.error);
   });
 }

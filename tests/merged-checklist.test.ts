@@ -52,7 +52,7 @@ test('cross-source moves, indentation and insertion use the whole logical list a
   const merged = vault.mergeNotes([first, second]);
   vault.undoManager.clear();
   assert.equal(vault.moveItemRelative(b, a, 'before'), true);
-  assert.deepEqual(families(vault, merged), [[b, []], [a, []], [leaf, [child]]]);
+  assert.deepEqual(families(vault, merged), [[b, [child]], [a, []], [leaf, []]]);
   vault.undo(); assert.deepEqual(families(vault, merged), [[a, []], [leaf, []], [b, [child]]]);
   assert.equal(vault.setItemParent(leaf, b), true);
   assert.deepEqual(families(vault, merged), [[a, []], [b, [child, leaf]]]);
@@ -190,7 +190,7 @@ test('legacy graph-only merges have zero read-time writes and materialize ranks 
   vault.getNotes(); vault.getItems(second);
   assert.equal(writes, 0); assert.deepEqual(Y.encodeStateAsUpdate(vault.doc), before);
   vault.undoManager.clear(); vault.moveItemRelative(b, az, 'before');
-  assert.deepEqual(ids(vault, first), [a, ac, b, az, bc]);
+  assert.deepEqual(ids(vault, first), [a, ac, b, bc, az]);
   assert.equal(vault.notes.get(first)!.get('unifiedChecklist'), true);
   assert.equal(vault.notes.get(second)!.get('unifiedChecklist'), true);
   assert.equal(vault.undoManager.undoStack.length, 1);

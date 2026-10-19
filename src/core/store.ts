@@ -8,6 +8,7 @@ import { LocalPersistence } from './persistence';
 import { StorageUpdateRequired } from './persistence-database';
 import { browserEditOwnership } from './edit-ownership';
 import { TabSync, tabChannelName } from './tab-sync';
+import { registerBackgroundSync, type BackgroundAvailability } from '../background-registration';
 import { Vault } from './vault';
 import { ImageStore, type ImageProgress } from './images';
 import { getPermanentDeletionBlobCandidates, PERMANENT_DELETION_ORIGIN } from './deletion';
@@ -25,6 +26,8 @@ export interface Snapshot {
   canUndo: boolean; canRedo: boolean; pending: number; localPending: number;
   images: ImageProgress;
   syncRejection: SyncRejection | null; automaticReload: boolean;
+  lastSyncAt?: number;
+  backgroundSync?: BackgroundAvailability;
 }
 class SessionError extends Error {
   constructor(message: string, readonly authMode?: AuthMode, readonly locked = false) { super(message); }
@@ -85,6 +88,7 @@ class StowStore {
   private broadcasting = false;
   private replicationScheduled = false;
   private parked = false;
+  private backgroundSync?: BackgroundAvailability;
 
   constructor() {
     window.addEventListener('compositionstart', () => { this.composing = true; }, true);
@@ -185,6 +189,8 @@ class StowStore {
       canUndo: visible && this.vault.undoManager.undoStack.length > 0,
       canRedo: visible && this.vault.undoManager.redoStack.length > 0,
       pending: this.requests.size + this.localPending, localPending: this.localPending,
+      lastSyncAt: visible ? this.persistence?.lastSyncAt : undefined,
+      backgroundSync: visible ? this.backgroundSync : undefined,
       images: visible && this.images ? { ...this.images.progress } : { pendingUploads: 0, thumbnailsRemaining: 0, originalBytes: 0 },
     };
     this.listeners.forEach(listener => listener());
@@ -426,6 +432,12 @@ class StowStore {
         await this.openAccount(account);
       }
       if (this.syncStopped || this.parked || this.access !== 'ready' || this.socket?.readyState === WebSocket.OPEN || this.socket?.readyState === WebSocket.CONNECTING) return;
+      void registerBackgroundSync(account).then(status => {
+        if (this.account?.vaultId === account.vaultId) { this.backgroundSync = status; this.refresh(); }
+      }).catch(error => {
+        console.error('Could not enable background refresh:', error);
+        if (this.account?.vaultId === account.vaultId) { this.backgroundSync = 'error'; this.refresh(); }
+      });
       this.status = 'connecting';
       this.refresh();
       startupMark('socket-start');
