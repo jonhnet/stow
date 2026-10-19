@@ -12,6 +12,10 @@ joined; they are not a presence indicator or an authorization list.
 
 Content, checklist order/nesting/checks, attachments, and content history are
 shared. Pinning, placement, color, labels, archive, and trash are personal.
+Background refresh currently downloads the private collection, including its
+references; shared content synchronizes when Stow is open. Opening a shared link
+does not change the private account selected for background refresh.
+
 Shared notes cannot be merged. Restore copy from shared history creates a new
 private note, including copies of its images, after adding it to a collection.
 

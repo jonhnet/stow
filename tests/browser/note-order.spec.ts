@@ -64,7 +64,7 @@ test('closing a mouse-opened note clears its controls, including after returning
     await note.click();
     const editor = page.getByRole('dialog', { name: 'Edit note', exact: true });
     await expect(editor).toBeVisible();
-    await expect(editor.getByRole('textbox', { name: 'Note title', exact: true })).toBeFocused();
+    await expect(editor).toBeFocused();
     if (close === 'button') await editor.getByRole('button', { name: 'Close', exact: true }).click();
     else if (close === 'backdrop') await page.locator('.modal-backdrop').click({ position: { x: 5, y: 5 } });
     else await page.keyboard.press('Escape');
@@ -92,6 +92,10 @@ test('keyboard navigation still reveals card controls and restores focus after c
   await expect(note).toBeFocused();
   await page.keyboard.press('Enter');
   await expect(page.getByRole('dialog', { name: 'Edit note', exact: true })).toBeVisible();
+  await expect(page.getByRole('dialog')).toBeFocused();
+  await page.keyboard.press('Shift+Tab');
+  await expect(page.getByRole('dialog').getByRole('button', { name: 'Pin note', exact: true })).toBeFocused();
+  await page.keyboard.press('Tab');
   await expect(page.getByRole('dialog').getByRole('textbox', { name: 'Note title', exact: true })).toBeFocused();
   await page.keyboard.press('Escape');
   await expect(page.getByRole('dialog')).toHaveCount(0);

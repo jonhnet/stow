@@ -192,7 +192,7 @@ test('arrows follow displayed checklist families and skip collapsed completed ro
     expect(await selection(fields[index - 1])).toEqual({ start: previousLength, end: previousLength });
   }
   const visibleRows = editor.locator('[data-check-row] .item-drag-handle');
-  // Navigation follows displayed order: completed children keep nesting but move below unchecked rows.
+  // Navigation follows the active rows, then the completed rows, including checked children.
   expect(await visibleRows.evaluateAll(handles => handles.map(handle => handle.getAttribute('aria-label')))).toEqual(['Reorder Parent', 'Reorder Other', 'Reorder Checked child', 'Reorder Done']);
   await expect(itemRow(editor, 'Parent').getByRole('checkbox')).not.toBeChecked();
   await expect(itemRow(editor, 'Checked child').getByRole('checkbox')).toBeChecked();
@@ -200,6 +200,7 @@ test('arrows follow displayed checklist families and skip collapsed completed ro
   await expect(itemRow(editor, 'Done').getByRole('checkbox')).toBeChecked();
 
   await editor.getByRole('button', { name: '2 completed items', exact: true }).click();
+  await expect(itemRow(editor, 'Checked child')).toHaveCount(0);
   await expect(itemRow(editor, 'Done')).toHaveCount(0);
   const add = textbox(editor, 'New list item');
   await add.focus();

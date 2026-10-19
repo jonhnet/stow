@@ -84,20 +84,25 @@ async function storedState() {
   } finally { db.close(); }
 }
 
-test('an empty completed sync survives reload without adding CRDT updates or repeated marker writes', async t => {
+test('completed sync refreshes its durable timestamp without CRDT updates or repeated initialization markers', async t => {
+  const now = t.mock.method(Date, 'now', () => 1000);
   const first = device(t);
   await first.persistence.ready;
   assert.equal(first.persistence.hasSynchronized, false);
   await first.persistence.markSynchronized();
   assert.equal(first.persistence.hasSynchronized, true);
+  assert.equal(first.persistence.lastSyncAt, 1000);
   assert.equal((await storedState()).entries, 0);
   await first.persistence.destroy();
   const reopened = device(t);
   await reopened.persistence.ready;
   assert.equal(reopened.persistence.hasSynchronized, true);
+  assert.equal(reopened.persistence.lastSyncAt, 1000);
+  now.mock.mockImplementation(() => 2000);
   const put = t.mock.method(IDBObjectStore.prototype, 'put');
   await reopened.persistence.markSynchronized();
-  assert.equal(put.mock.callCount(), 0);
+  assert.deepEqual(put.mock.calls.map(call => call.arguments), [[2000, 'lastSyncAt']]);
+  assert.equal(reopened.persistence.lastSyncAt, 2000);
   assert.equal((await storedState()).entries, 0);
 });
 
@@ -110,6 +115,7 @@ test('initial sync is not marked complete when its current data fails to commit'
   assert.equal(first.persistence.hasSynchronized, false);
   const db = await openDB('stow-notes-persistence-test');
   assert.equal(await db.get('maintenance', 'initialSyncComplete'), undefined);
+  assert.equal(await db.get('maintenance', 'lastSyncAt'), undefined);
   db.close(); add.mock.restore();
   await first.persistence.markSynchronized();
   await first.persistence.destroy();

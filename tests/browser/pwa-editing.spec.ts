@@ -34,6 +34,56 @@ async function checklist(page: Page) {
   await card(page).tap();
 }
 
+test('opening a long note reads full screen; only a second tap enters text at that position', async ({ page }) => {
+  const source = '**Read first**, then edit here.\n\n' + 'More to read.\n'.repeat(40);
+  await page.getByRole('button', { name: 'Take a note…', exact: true }).tap();
+  await editor(page).getByRole('textbox', { name: 'Note title', exact: true }).fill('Read first');
+  const body = editor(page).getByRole('textbox', { name: 'Note text', exact: true });
+  await body.focus(); await body.fill(source);
+  await action(page, 'Close').tap();
+  // Even a transient input focus can raise the Android keyboard.
+  await page.evaluate(() => {
+    Object.assign(window, { readingInputFocuses: 0 });
+    document.addEventListener('focusin', event => {
+      if ((event.target as Element).matches('input, textarea, [contenteditable="true"]')) (window as any).readingInputFocuses++;
+    });
+  });
+  await page.getByRole('article', { name: 'Open note: Read first', exact: true }).tap();
+  await expect(editor(page)).toBeFocused();
+  await expect(body).toHaveAttribute('aria-readonly', 'true');
+  await expect(body.locator('strong')).toHaveText('Read first');
+  await expect.poll(() => editor(page).evaluate(element => {
+    const r = element.getBoundingClientRect();
+    return Math.abs(r.top) < 1 && Math.abs(r.left) < 1 && Math.abs(r.width - innerWidth) < 1 && Math.abs(r.height - innerHeight) < 1;
+  })).toBe(true);
+  const scroll = editor(page).locator('.editor-scroll');
+  await scroll.evaluate(element => { element.scrollTop = element.scrollHeight; });
+  await expect.poll(() => scroll.evaluate(element => element.scrollTop)).toBeGreaterThan(0);
+  expect(await page.evaluate(() => (window as any).readingInputFocuses)).toBe(0);
+  await scroll.evaluate(element => { element.scrollTop = 0; });
+  const point = await body.locator('strong').evaluate(element => {
+    const text = document.createTreeWalker(element, NodeFilter.SHOW_TEXT).nextNode()!;
+    const range = document.createRange();
+    range.setStart(text, 2); range.setEnd(text, 3);
+    const r = range.getBoundingClientRect();
+    return { x: r.left + r.width * 0.2, y: r.top + r.height / 2 };
+  });
+  await page.touchscreen.tap(point.x, point.y);
+  await expect(body).toBeFocused();
+  await page.keyboard.insertText('X');
+  await expect(body).toHaveValue(source.slice(0, 4) + 'X' + source.slice(4));
+});
+
+test('opening a checklist leaves its text unfocused until an item is tapped', async ({ page }) => {
+  await checklist(page);
+  await expect(editor(page)).toBeFocused();
+  const first = editor(page).getByRole('textbox', { name: 'List item text', exact: true }).first();
+  await expect(first).toHaveAttribute('aria-readonly', 'true');
+  await first.tap();
+  await expect(first).toBeFocused();
+  await expect(first).toHaveValue('First');
+});
+
 test('touch Undo/Redo stays visible with the keyboard viewport and survives a closed page', async ({ page, context }) => {
   await checklist(page);
   // The same checklist reorder operation used by touch drag, with deterministic

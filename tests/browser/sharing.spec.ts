@@ -67,6 +67,8 @@ test('shared images and history survive reference removal, re-add, and restoring
   try {
     const url = await publish(alice.page, 'Photographic evidence');
     await card(alice.page, 'Photographic evidence').click();
+    // setInputFiles bypasses the disabled Add image button during shared-scope startup.
+    await expect(editor(alice.page).getByRole('button', { name: 'Add image', exact: true })).toBeEnabled();
     await editor(alice.page).locator('input[type=file]').setInputFiles({ name: 'evidence.png', mimeType: 'image/png', buffer: Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAACXBIWXMAAAPoAAAD6AG1e1JrAAAADUlEQVQImWP4////fwAJ+wP9CNHoHgAAAABJRU5ErkJggg==', 'base64') });
     await expect(editor(alice.page).locator('img').first()).toBeVisible();
     await editor(alice.page).getByRole('button', { name: 'Close', exact: true }).click(); await connected(alice.page);

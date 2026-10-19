@@ -33,6 +33,7 @@ export class LocalPersistence {
   readonly ready: Promise<void>;
   private synchronized = false;
   get hasSynchronized() { return this.synchronized; }
+  lastSyncAt?: number;
   private db?: PersistenceConnection;
   private writer: PersistenceWriter;
   private pending: Uint8Array[] = [];
@@ -161,6 +162,7 @@ export class LocalPersistence {
       const tail = (await updatesStore.openKeyCursor(null, 'prev'))?.key;
       const validated = tail === undefined || tail === await transaction.objectStore('maintenance').get('validatedThrough');
       this.synchronized = await transaction.objectStore('maintenance').get('initialSyncComplete') === 1;
+      this.lastSyncAt = await transaction.objectStore('maintenance').get('lastSyncAt');
       const undo = this.undoOwner ? await transaction.objectStore('undo').get(this.undoOwner) : undefined;
       await done;
       startupMark('idb-read-end');
@@ -380,14 +382,17 @@ export class LocalPersistence {
    * This local marker follows durable current data and never appends a CRDT edit. */
   async markSynchronized(): Promise<void> {
     await this.whenDurable();
-    if (this.synchronized || this.upgrading || this.destroyed) return;
+    if (this.upgrading || this.destroyed) return;
     try {
       const transaction = this.db!.transaction('maintenance', 'readwrite');
       const done = transaction.done; void done.catch(() => {});
       // Another tab may already have committed the same account-scoped marker.
       if (await transaction.store.get('initialSyncComplete') !== 1) await transaction.store.put(1, 'initialSyncComplete');
+      const syncedAt = Date.now();
+      await transaction.store.put(syncedAt, 'lastSyncAt');
       await done;
       this.synchronized = true;
+      this.lastSyncAt = syncedAt;
     } catch (reason) { throw this.report(reason); }
   }
 

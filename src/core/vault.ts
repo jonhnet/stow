@@ -765,14 +765,15 @@ export class Vault {
     if (!group) return;
     const rows = checklistRows(groups).filter(row => row.item.checked === !!item.get('checked'));
     const index = rows.findIndex(row => row.item.id === id), other = rows[index + direction];
-    if (other) this.reorderChecklistRow(id, other.item.id, direction === -1 ? 'before' : 'after', rows[index].nested);
+    if (other) this.reorderChecklistRows(id, other.item.id, direction === -1 ? 'before' : 'after', rows[index].nested);
   }
-  /** Move one row to a literal slot. Undefined parent infers the target's depth; null means root. */
+  /** Drag a root with its children, or a child alone, to a literal slot.
+   * Undefined parent infers the target's depth; null means root. A nested drop flattens the group. */
   moveItemRelative(itemId: string, targetId: string, placement: 'before' | 'after', requestedParent?: string | null): boolean {
     if (!!this.items.get(itemId)?.get('checked') !== !!this.items.get(targetId)?.get('checked')) return false;
-    return this.reorderChecklistRow(itemId, targetId, placement, requestedParent === undefined ? undefined : requestedParent !== null, requestedParent ?? undefined);
+    return this.reorderChecklistRows(itemId, targetId, placement, requestedParent === undefined ? undefined : requestedParent !== null, requestedParent ?? undefined, 'rank', true);
   }
-  private reorderChecklistRow(itemId: string, targetId: string, placement: 'before' | 'after', nested?: boolean, expectedParent?: string, field: 'rank' | 'parentId' = 'rank'): boolean {
+  private reorderChecklistRows(itemId: string, targetId: string, placement: 'before' | 'after', nested?: boolean, expectedParent?: string, field: 'rank' | 'parentId' = 'rank', carryChildren = false): boolean {
     if (itemId === targetId) return false;
     const item = this.items.get(itemId), target = this.items.get(targetId);
     if (!item || !target || !this.projection.sourceIds(item.get('noteId')).includes(target.get('noteId'))) return false;
@@ -782,7 +783,10 @@ export class Vault {
     if (!source || !destination) return false;
     // Keep hidden rows in the logical layout so their parent links survive.
     const rows = checklistRows(groups), selected = rows.find(row => row.item.id === itemId)!;
-    const remaining = rows.filter(row => row !== selected);
+    const carried = new Set([itemId, ...(carryChildren && source.root.id === itemId ? source.children.map(child => child.id) : [])]);
+    if (carried.has(targetId)) return false;
+    const moving = rows.filter(row => carried.has(row.item.id));
+    const remaining = rows.filter(row => !carried.has(row.item.id));
     const index = remaining.findIndex(row => row.item.id === targetId) + (placement === 'after' ? 1 : 0);
     nested ??= destination.root.id !== targetId;
     if (nested) {
@@ -790,7 +794,7 @@ export class Vault {
       const parent = remaining.slice(0, index).reverse().find(row => !row.nested) ?? remaining[0];
       if (expectedParent && expectedParent !== parent.item.id) return false;
     }
-    remaining.splice(index, 0, { ...selected, nested });
+    remaining.splice(index, 0, ...moving.map(row => ({ ...row, nested: row === selected ? nested : true })));
     return this.changeChecklistLayout(selected.item, groups, remaining, field);
   }
 
@@ -803,7 +807,7 @@ export class Vault {
     if (requestedParent) {
       const parent = groups.find(group => group.root.id === requestedParent);
       if (!parent || (source.root.id === requestedParent && source.root.id !== itemId)) return false;
-      return this.reorderChecklistRow(itemId, parent.children.at(-1)?.id ?? parent.root.id, 'after', true, requestedParent, 'parentId');
+      return this.reorderChecklistRows(itemId, parent.children.at(-1)?.id ?? parent.root.id, 'after', true, requestedParent, 'parentId');
     }
     if (source.root.id === itemId) return false;
     // Keep hidden rows in the logical layout so their parent links survive.
@@ -819,7 +823,7 @@ export class Vault {
     const rows = checklistRows(groups).filter(row => row.item.checked === !!item.get('checked'));
     const index = rows.findIndex(row => row.item.id === itemId);
     if (index === 0) return false;
-    return this.reorderChecklistRow(itemId, rows[index - 1].item.id, 'after', true, undefined, 'parentId');
+    return this.reorderChecklistRows(itemId, rows[index - 1].item.id, 'after', true, undefined, 'parentId');
   }
 
   outdentItem(itemId: string): boolean {
