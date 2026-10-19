@@ -3,7 +3,7 @@ import { createPortal } from 'react-dom';
 import { ChevronDown, ChevronRight, GripVertical, X } from 'lucide-react';
 import { store } from './core/store';
 import type { Item, Note } from './core/types';
-import { checklistGroups, isChecklistGroupChecked } from './core/checklist';
+import { checklistGroups } from './core/checklist';
 import MarkdownField from './MarkdownField';
 import NewChecklistItem from './NewChecklistItem';
 import './checklist.css';
@@ -42,11 +42,12 @@ function viewport(scroller: HTMLElement) {
 }
 
 function depthBoundary(drag: Drag) {
-  const root = drag.group.querySelector<HTMLElement>('[data-check-row]:not([data-parent-id])')!;
+  const root = drag.group.querySelector<HTMLElement>('[data-check-row]')!;
   const checkbox = root.querySelector<HTMLInputElement>('input[type="checkbox"]')!.getBoundingClientRect();
   // The entire root checkbox column is a top-level target. The boundary sits
-  // in the gap before the child handles, independent of where a drag started.
-  return (checkbox.right + root.getBoundingClientRect().left + INDENT) / 2;
+  // in the gap before the child handles. A section can contain only children
+  // when their parents have the opposite checked state.
+  return (checkbox.right - (root.dataset.parentId ? INDENT : 0) + root.getBoundingClientRect().left + INDENT) / 2;
 }
 
 function childDepth(drag: Drag) {
@@ -66,8 +67,7 @@ function dropTarget(drag: Drag): DropTarget | null {
   if (childDepth(drag)) {
     if (slot === 0) return null;
     const previous = rows[slot - 1];
-    const parent = rows.slice(0, slot).reverse().find(row => !row.dataset.parentId) ?? rows[0];
-    return { id: previous.dataset.checkRow!, placement: 'after', parentId: parent.dataset.checkRow!, markerId: previous.dataset.checkRow!, markerPlacement: 'after' };
+    return { id: previous.dataset.checkRow!, placement: 'after', parentId: previous.dataset.rootId!, markerId: previous.dataset.checkRow!, markerPlacement: 'after' };
   }
   const next = rows[slot];
   const target = next ?? rows[rows.length - 1];
@@ -81,7 +81,7 @@ type RowActions = {
   end(event: ReactPointerEvent<HTMLButtonElement>): void;
   cancel(event: ReactPointerEvent<HTMLButtonElement>): void;
   gripKey(event: ReactKeyboardEvent<HTMLButtonElement>, item: Item): void;
-  textKey(event: ReactKeyboardEvent<HTMLElement>, item: Item, root: Item): void;
+  textKey(event: ReactKeyboardEvent<HTMLElement>, item: Item): void;
 };
 
 const ChecklistRow = memo(function ChecklistRow({ item, root, disabled, preview, actions }: {
@@ -94,7 +94,7 @@ const ChecklistRow = memo(function ChecklistRow({ item, root, disabled, preview,
     return <div key={item.id} role="listitem" data-check-row={item.id} data-root-id={root.id} data-parent-id={parentId} style={style} className={`editor-check-row ${parentId ? 'is-child' : ''} ${item.checked ? 'is-checked' : ''} ${preview?.itemId === item.id ? 'drag-source' : ''} ${insertion}`}>
       {!disabled && <button type="button" className="item-drag-handle" aria-label={`Reorder ${item.text || 'list item'}`} aria-describedby={`${item.id}-nesting-help`} aria-keyshortcuts="ArrowUp ArrowDown ArrowLeft ArrowRight" title="Drag to reorder or nest. Arrow keys move, indent, or outdent." onPointerDown={event => actions.current.start(event, item)} onPointerMove={event => actions.current.move(event)} onPointerUp={event => actions.current.end(event)} onPointerCancel={event => actions.current.cancel(event)} onLostPointerCapture={event => actions.current.cancel(event)} onClick={event => { event.preventDefault(); event.stopPropagation(); }} onKeyDown={event => actions.current.gripKey(event, item)}><GripVertical size={17} /></button>}
       <input type="checkbox" checked={item.checked} disabled={disabled} aria-label={`Complete ${item.text || 'list item'}`} onChange={() => store.vault.toggleItem(item.id)} />
-      <MarkdownField data-note-field inline className="item-text" data-item-id={item.id} value={item.text} disabled={disabled} aria-label="List item text" onChange={event => { const value = event.currentTarget.value; store.vault.setItemText(item.id, value); }} onKeyDown={event => actions.current.textKey(event, item, root)} />
+      <MarkdownField data-note-field inline className="item-text" data-item-id={item.id} value={item.text} disabled={disabled} aria-label="List item text" onChange={event => { const value = event.currentTarget.value; store.vault.setItemText(item.id, value); }} onKeyDown={event => actions.current.textKey(event, item)} />
       {!disabled && <div className="item-actions"><button type="button" className="icon-button" aria-label="Delete list item" title="Delete list item" onClick={() => store.vault.deleteItem(item.id)}><X size={16} /></button></div>}
       <span id={`${item.id}-nesting-help`} className="sr-only">{parentId ? `Child of ${root.text || 'an empty item'}. ` : 'Top-level item. '}Up and down move this item. Right indents; left outdents.</span>
     </div>;
@@ -111,13 +111,14 @@ function EditorChecklist({ note, disabled, onAddItem }: { note: Note; disabled: 
   const dragRef = useRef<Drag | null>(null);
   const frameRef = useRef<number | null>(null);
   const groups = checklistGroups(note.items);
-  const active = groups.filter(group => !isChecklistGroupChecked(group));
-  const completed = groups.filter(isChecklistGroupChecked);
+  // Partition the logical sequence without changing parent links or ranks.
+  const rows = groups.flatMap(group => [group.root, ...group.children].map(item => ({ item, root: group.root })));
+  const active = rows.filter(row => !row.item.checked);
+  const completed = rows.filter(row => row.item.checked);
 
   useLayoutEffect(() => {
     if (!focusRequest) return;
-    const family = groups.find(group => group.root.id === focusRequest.id || group.children.some(child => child.id === focusRequest.id));
-    if (!showCompleted && family && isChecklistGroupChecked(family)) { setShowCompleted(true); return; }
+    if (!showCompleted && note.items.find(item => item.id === focusRequest.id)?.checked) { setShowCompleted(true); return; }
     const selector = focusRequest.kind === 'grip' ? `[data-check-row="${focusRequest.id}"] .item-drag-handle` : `[data-item-id="${focusRequest.id}"]`;
     ref.current?.querySelector<HTMLElement>(selector)?.focus();
     // Focusing a rendered Markdown field mounts its source textarea. Restore its
@@ -157,8 +158,7 @@ function EditorChecklist({ note, disabled, onAddItem }: { note: Note; disabled: 
       store.vault.moveItemRelative(drag.itemId, target.id, target.placement, target.parentId);
       const items = store.vault.getItems(noteRef.current.id);
       const parent = target.parentId && items.find(item => item.id === target.parentId);
-      const family = checklistGroups(items).find(group => group.root.id === drag.itemId || group.children.some(child => child.id === drag.itemId));
-      if (family && isChecklistGroupChecked(family) !== drag.checked) {
+      if (items.find(item => item.id === drag.itemId)?.checked !== drag.checked) {
         setFocusRequest({ id: drag.itemId, kind: 'grip' });
       }
       setAnnouncement(parent ? `Moved ${drag.text} under ${parent.text || 'an empty item'}.` : `Moved ${drag.text} to the top level.`);
@@ -188,7 +188,7 @@ function EditorChecklist({ note, disabled, onAddItem }: { note: Note; disabled: 
     if (!drag) return;
     const current = checklistGroups(note.items).find(group => group.root.id === drag.itemId || group.children.some(child => child.id === drag.itemId));
     const parentId = current && current.root.id !== drag.itemId ? current.root.id : null;
-    if (disabled || !current || isChecklistGroupChecked(current) !== drag.checked || parentId !== drag.parentId || (drag.checked && !showCompleted)) finishDrag(false);
+    if (disabled || !current || note.items.find(item => item.id === drag.itemId)?.checked !== drag.checked || parentId !== drag.parentId || (drag.checked && !showCompleted)) finishDrag(false);
     else updatePreview(drag);
   }, [disabled, note.items, showCompleted]);
 
@@ -222,7 +222,7 @@ function EditorChecklist({ note, disabled, onAddItem }: { note: Note; disabled: 
     handle.focus({ preventScroll: true });
     handle.setPointerCapture(event.pointerId);
     dragRef.current = {
-      itemId: item.id, text: item.text || 'list item', checked: isChecklistGroupChecked(family), parentId,
+      itemId: item.id, text: item.text || 'list item', checked: item.checked, parentId,
       pointerId: event.pointerId, handle, group, scroller: scrollContainer(group),
       startX: event.clientX, startY: event.clientY,
       x: event.clientX, y: event.clientY, moved: false,
@@ -242,14 +242,9 @@ function EditorChecklist({ note, disabled, onAddItem }: { note: Note; disabled: 
 
   const indent = (item: Item, outdent: boolean) => {
     const previousFamily = groups.find(group => group.root.id === item.id || group.children.some(child => child.id === item.id))!;
-    const source = document.activeElement;
-    const selection = source instanceof HTMLTextAreaElement && source.dataset.itemId === item.id ? { start: source.selectionStart, end: source.selectionEnd, direction: source.selectionDirection } : undefined;
     const changed = outdent ? store.vault.outdentItem(item.id) : store.vault.indentItem(item.id);
     if (changed) {
       const family = checklistGroups(store.vault.getItems(note.id)).find(group => group.root.id === item.id || group.children.some(child => child.id === item.id))!;
-      if (isChecklistGroupChecked(family) !== isChecklistGroupChecked(previousFamily)) {
-        setFocusRequest({ id: item.id, kind: selection ? 'text' : 'grip', selection });
-      }
       setAnnouncement(family.root.id === item.id ? `${item.text || 'List item'} moved to the top level.` : `${item.text || 'List item'} nested under ${family.root.text || 'an empty item'}.`);
     } else if (!outdent && previousFamily.root.id === item.id) setAnnouncement('There is no preceding item to nest under.');
     return changed;
@@ -273,7 +268,7 @@ function EditorChecklist({ note, disabled, onAddItem }: { note: Note; disabled: 
         }
         if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') { event.preventDefault(); event.stopPropagation(); if (!dragRef.current) indent(item, event.key === 'ArrowLeft'); }
       },
-    textKey(event, item, root) {
+    textKey(event, item) {
         if (event.nativeEvent.isComposing) return;
         if (event.key === 'Tab' && !event.ctrlKey && !event.metaKey && !event.altKey && indent(item, event.shiftKey)) { event.preventDefault(); event.stopPropagation(); }
         if (event.key === 'Enter' && !event.shiftKey && !event.ctrlKey && !event.metaKey) {
@@ -284,8 +279,7 @@ function EditorChecklist({ note, disabled, onAddItem }: { note: Note; disabled: 
         }
         if (event.key === 'Backspace' && !item.text) {
           event.preventDefault();
-          const families = active.some(group => group.root.id === root.id) ? active : completed;
-          const group = families.flatMap(group => [group.root, ...group.children]);
+          const group = (item.checked ? completed : active).map(row => row.item);
           const index = group.findIndex(entry => entry.id === item.id);
           store.vault.deleteItem(item.id);
           if (index > 0) setFocusRequest({ id: group[index - 1].id, kind: 'text' });
@@ -294,13 +288,12 @@ function EditorChecklist({ note, disabled, onAddItem }: { note: Note; disabled: 
         if (event.altKey && (event.key === 'ArrowUp' || event.key === 'ArrowDown')) { event.preventDefault(); store.vault.moveItem(item.id, event.key === 'ArrowUp' ? -1 : 1); }
       },
   };
-  const renderGroup = (group: typeof groups[number]) => [group.root, ...group.children]
-    .filter(item => item.id !== composingItemId).map(item => <ChecklistRow key={item.id} item={item} root={group.root} disabled={disabled} preview={preview} actions={actions} />);
-  const completedCount = completed.reduce((count, group) => count + 1 + group.children.length, 0);
+  const renderRow = ({ item, root }: typeof rows[number]) => item.id === composingItemId ? null : <ChecklistRow key={item.id} item={item} root={root} disabled={disabled} preview={preview} actions={actions} />;
+  const completedCount = completed.length;
   return <div ref={ref} className={`editor-checklist ${preview ? 'is-reordering' : ''}`} style={{ '--check-indent': `${INDENT}px` } as CSSProperties}>
-    <div className="checklist-group" role="list" aria-label="Checklist items" data-check-group="unchecked">{active.flatMap(renderGroup)}</div>
+    <div className="checklist-group" role="list" aria-label="Checklist items" data-check-group="unchecked">{active.map(renderRow)}</div>
     {!disabled && <NewChecklistItem onAdd={onAddItem} onEdit={(id, text) => store.vault.setItemText(id, text)} onFocus={id => setFocusRequest({ id, kind: 'text' })} onPendingChange={setComposingItemId} />}
-    {completedCount > 0 && <div className="completed-items"><button type="button" className="completed-toggle" onClick={() => setShowCompleted(!showCompleted)}>{showCompleted ? <ChevronDown size={16} /> : <ChevronRight size={16} />}{completedCount} completed item{completedCount === 1 ? '' : 's'}</button>{showCompleted && <div className="checklist-group" role="list" aria-label="Completed checklist items" data-check-group="checked">{completed.flatMap(renderGroup)}</div>}</div>}
+    {completedCount > 0 && <div className="completed-items"><button type="button" className="completed-toggle" onClick={() => setShowCompleted(!showCompleted)}>{showCompleted ? <ChevronDown size={16} /> : <ChevronRight size={16} />}{completedCount} completed item{completedCount === 1 ? '' : 's'}</button>{showCompleted && <div className="checklist-group" role="list" aria-label="Completed checklist items" data-check-group="checked">{completed.map(renderRow)}</div>}</div>}
     <span className="sr-only" role="status" aria-live="polite" aria-atomic="true">{announcement}</span>
     {preview && createPortal(<div className={`check-drag-preview ${preview.target ? '' : 'invalid-drop'} ${preview.target?.parentId ? 'nested-drop' : ''}`} aria-hidden="true" style={{ width: preview.width, left: Math.max(8, Math.min(preview.x + 14, window.innerWidth - preview.width - 8)), top: Math.max(8, Math.min(preview.y + 12, window.innerHeight - 60)) }}><GripVertical size={16} /><div><span>{preview.text}</span>{preview.target?.parentId && <small>Nested item</small>}</div></div>, document.body)}
   </div>;

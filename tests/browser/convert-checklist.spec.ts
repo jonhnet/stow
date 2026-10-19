@@ -92,7 +92,7 @@ test('converted lines precede existing checklist families without changing their
   };
 
   await convert(dialog);
-  await expect.poll(() => itemOrder(dialog)).toEqual(['New first', 'New second', 'Existing parent', 'Existing child', 'Existing last']);
+  await expect.poll(() => itemOrder(dialog)).toEqual(['New first', 'New second', 'Existing parent', 'Existing last', 'Existing child']);
   await expectExistingRows();
   for (const text of ['New first', 'New second']) {
     await expect(row(dialog, text)).not.toHaveClass(/is-child/);
@@ -101,11 +101,11 @@ test('converted lines precede existing checklist families without changing their
   await expectEmptyBody(dialog);
   await page.keyboard.press('Control+z');
   await expect(body(dialog)).toHaveValue(source);
-  await expect.poll(() => itemOrder(dialog)).toEqual(['Existing parent', 'Existing child', 'Existing last']);
+  await expect.poll(() => itemOrder(dialog)).toEqual(['Existing parent', 'Existing last', 'Existing child']);
   await expectExistingRows();
   await page.keyboard.press('Control+Shift+z');
   await expectEmptyBody(dialog);
-  await expect.poll(() => itemOrder(dialog)).toEqual(['New first', 'New second', 'Existing parent', 'Existing child', 'Existing last']);
+  await expect.poll(() => itemOrder(dialog)).toEqual(['New first', 'New second', 'Existing parent', 'Existing last', 'Existing child']);
   await expectExistingRows();
 });
 

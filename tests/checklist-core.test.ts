@@ -398,3 +398,19 @@ test('explicit bulk imports preserve valid parents and reject missing, foreign o
     assert.deepEqual(Y.encodeStateAsUpdate(model.doc), before);
   }
 });
+
+test('a checked child moves among completed rows without losing unchecked siblings', t => {
+  const model = vault(t), note = model.createNote('checklist');
+  const parent = model.addItem(note, 'Parent');
+  const first = model.addItem(note, 'First', parent), second = model.addItem(note, 'Second', parent);
+  const done = model.addItem(note, 'Done');
+  const before = model.getItems(note).map(({ id, rank, parentId }) => ({ id, rank, parentId }));
+  model.toggleItem(first); model.toggleItem(done);
+  assert.deepEqual(model.getItems(note).map(({ id, rank, parentId }) => ({ id, rank, parentId })), before);
+  model.moveItem(first, 1);
+  assert.deepEqual(groups(model, note), [['Parent', ['Second']], ['Done', ['First']]]);
+  assert.equal(model.items.get(second)!.get('checked'), false);
+  model.undo();
+  assert.deepEqual(groups(model, note), [['Parent', ['First', 'Second']], ['Done', []]]);
+  assert.equal(model.items.get(first)!.get('checked'), true);
+});

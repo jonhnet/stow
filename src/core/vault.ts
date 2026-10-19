@@ -6,7 +6,7 @@ import { diffHistory } from './history';
 import { historyNotes } from './history-view';
 import { VaultProjection } from './projection';
 import { textSplice } from './text-splice';
-import { checklistGroups, isChecklistGroupChecked, type ChecklistGroup } from './checklist';
+import { checklistGroups, type ChecklistGroup } from './checklist';
 import { compareAttachmentOrder } from './attachments';
 import { authoredLabelNames, generationColorKey, generationMembershipKey, labelIdentityActive, type LabelLifecycle } from './labels';
 import { actionText, composeTextDescriptions, describeHistoryAction, describeLabelChange, describeTextChange, quoteExcerpt, textDescription, textTarget, type TextDescription, type UndoDescription } from './history-description';
@@ -763,12 +763,13 @@ export class Vault {
     const groups = checklistGroups(this.getItems(item.get('noteId')));
     const group = groups.find(group => group.root.id === id || group.children.some(child => child.id === id));
     if (!group) return;
-    const rows = checklistRows(groups.filter(entry => isChecklistGroupChecked(entry) === isChecklistGroupChecked(group)));
+    const rows = checklistRows(groups).filter(row => row.item.checked === !!item.get('checked'));
     const index = rows.findIndex(row => row.item.id === id), other = rows[index + direction];
     if (other) this.reorderChecklistRow(id, other.item.id, direction === -1 ? 'before' : 'after', rows[index].nested);
   }
   /** Move one row to a literal slot. Undefined parent infers the target's depth; null means root. */
   moveItemRelative(itemId: string, targetId: string, placement: 'before' | 'after', requestedParent?: string | null): boolean {
+    if (!!this.items.get(itemId)?.get('checked') !== !!this.items.get(targetId)?.get('checked')) return false;
     return this.reorderChecklistRow(itemId, targetId, placement, requestedParent === undefined ? undefined : requestedParent !== null, requestedParent ?? undefined);
   }
   private reorderChecklistRow(itemId: string, targetId: string, placement: 'before' | 'after', nested?: boolean, expectedParent?: string, field: 'rank' | 'parentId' = 'rank'): boolean {
@@ -778,9 +779,9 @@ export class Vault {
     const groups = checklistGroups(this.getItems(item.get('noteId')));
     const source = groups.find(group => group.root.id === itemId || group.children.some(child => child.id === itemId));
     const destination = groups.find(group => group.root.id === targetId || group.children.some(child => child.id === targetId));
-    if (!source || !destination || isChecklistGroupChecked(source) !== isChecklistGroupChecked(destination)) return false;
-    const visible = groups.filter(group => isChecklistGroupChecked(group) === isChecklistGroupChecked(source));
-    const rows = checklistRows(visible), selected = rows.find(row => row.item.id === itemId)!;
+    if (!source || !destination) return false;
+    // Keep hidden rows in the logical layout so their parent links survive.
+    const rows = checklistRows(groups), selected = rows.find(row => row.item.id === itemId)!;
     const remaining = rows.filter(row => row !== selected);
     const index = remaining.findIndex(row => row.item.id === targetId) + (placement === 'after' ? 1 : 0);
     nested ??= destination.root.id !== targetId;
@@ -790,7 +791,7 @@ export class Vault {
       if (expectedParent && expectedParent !== parent.item.id) return false;
     }
     remaining.splice(index, 0, { ...selected, nested });
-    return this.changeChecklistLayout(selected.item, visible, remaining, field);
+    return this.changeChecklistLayout(selected.item, groups, remaining, field);
   }
 
   /** Set a parent by moving just this row, or outdent in its current position. */
@@ -805,21 +806,20 @@ export class Vault {
       return this.reorderChecklistRow(itemId, parent.children.at(-1)?.id ?? parent.root.id, 'after', true, requestedParent, 'parentId');
     }
     if (source.root.id === itemId) return false;
-    const visible = groups.filter(group => isChecklistGroupChecked(group) === isChecklistGroupChecked(source));
-    const rows = checklistRows(visible), selected = rows.find(row => row.item.id === itemId)!;
+    // Keep hidden rows in the logical layout so their parent links survive.
+    const rows = checklistRows(groups), selected = rows.find(row => row.item.id === itemId)!;
     selected.nested = false;
-    return this.changeChecklistLayout(selected.item, visible, rows, 'parentId');
+    return this.changeChecklistLayout(selected.item, groups, rows, 'parentId');
   }
 
   indentItem(itemId: string): boolean {
     const item = this.items.get(itemId); if (!item || item.get('deleted')) return false;
     const groups = checklistGroups(this.getItems(item.get('noteId'))), group = groups.find(group => group.root.id === itemId);
     if (!group) return false;
-    const visible = groups.filter(entry => isChecklistGroupChecked(entry) === isChecklistGroupChecked(group));
-    const rows = checklistRows(visible), index = rows.findIndex(row => row.item.id === itemId);
+    const rows = checklistRows(groups).filter(row => row.item.checked === !!item.get('checked'));
+    const index = rows.findIndex(row => row.item.id === itemId);
     if (index === 0) return false;
-    rows[index].nested = true;
-    return this.changeChecklistLayout(rows[index].item, visible, rows, 'parentId');
+    return this.reorderChecklistRow(itemId, rows[index - 1].item.id, 'after', true, undefined, 'parentId');
   }
 
   outdentItem(itemId: string): boolean {

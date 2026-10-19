@@ -8,7 +8,7 @@ import {
 } from 'lucide-react';
 import { store, useStow } from './core/store';
 import type { Label, Note, NoteColor } from './core/types';
-import { checklistGroups, isChecklistGroupChecked } from './core/checklist';
+import { checklistGroups } from './core/checklist';
 import EditorChecklist from './EditorChecklist';
 import { useEditBoundaries } from './useEditBoundaries';
 import { useDismissiblePopup } from './useDismissiblePopup';
@@ -91,8 +91,7 @@ const NoteCard = memo(function NoteCard({ note, labels, onOpen, selected, select
   const [palette, setPalette] = useState(false);
   const paletteRef = useRef<HTMLDivElement>(null);
   const activeItems = checklistGroups(note.items)
-    .filter(group => !isChecklistGroupChecked(group))
-    .flatMap(({ root, children }) => [{ item: root, child: false }, ...children.map(item => ({ item, child: true }))]);
+    .flatMap(({ root, children }) => [{ item: root, child: false }, ...children.map(item => ({ item, child: true }))]).filter(({ item }) => !item.checked);
   const visibleItems = activeItems.slice(0, 7);
   const completed = note.items.filter(i => i.checked).length;
   const body = note.body;

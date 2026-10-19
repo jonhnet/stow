@@ -158,8 +158,7 @@ test('keyboard nesting preserves the source field and selection, permits focus n
   await expect(row(dialog, 'Parent')).not.toHaveClass(/is-child/);
   await expect(grip(dialog, 'Parent')).toBeFocused();
 
-  // A checked child remains in its active family. Empty Backspace follows visible rows,
-  // including a checked previous sibling, rather than filtering by checkbox state.
+  // Backspace follows the active section, skipping the checked sibling.
   await row(dialog, 'Child text').getByRole('checkbox').check();
   await field.click();
   await page.keyboard.press('End');
@@ -169,7 +168,7 @@ test('keyboard nesting preserves the source field and selection, permits focus n
   await expect(empty.getByRole('textbox')).toBeFocused();
   await page.keyboard.press('Backspace');
   await expect(empty).toHaveCount(0);
-  await expect(field).toBeFocused();
+  await expect(row(dialog, 'Parent').getByRole('textbox')).toBeFocused();
   await grip(dialog, 'Child text').focus();
   await page.keyboard.press('ArrowLeft');
   await expect(row(dialog, 'Child text')).not.toHaveClass(/is-child/);
@@ -209,20 +208,21 @@ test('Enter on a parent inserts and focuses its first child while Enter on a lea
   await expect(row(dialog, 'Next root')).not.toHaveClass(/is-child/);
 });
 
-test('completion keeps mixed families together and deleting a parent promotes children with undo', async ({ page }) => {
+test('completion partitions mixed families by checkedness and deleting a parent promotes children with undo', async ({ page }) => {
   const dialog = await createList(page, 'Nested completion', ['Parent', 'Child one', 'Child two', 'Other']);
   await indent(page, dialog, 'Child one');
   await indent(page, dialog, 'Child two');
   const active = dialog.getByRole('list', { name: 'Checklist items', exact: true });
   const completed = dialog.getByRole('list', { name: 'Completed checklist items', exact: true });
   await row(dialog, 'Child one').getByRole('checkbox').check();
-  await expect(active.locator('[data-check-row]')).toHaveCount(4);
-  await expect(completed).toHaveCount(0);
+  await expect(active.locator('[data-check-row]')).toHaveCount(3);
+  await expect(completed.locator('[data-check-row]')).toHaveCount(1);
+  await expect.poll(() => order(dialog)).toEqual(['Parent', 'Child two', 'Other', 'Child one']);
   await row(dialog, 'Parent').getByRole('checkbox').click();
   await expect(completed.locator('[data-check-row]')).toHaveCount(3);
   await expect(completed.getByRole('checkbox', { checked: true })).toHaveCount(3);
   await row(dialog, 'Child two').getByRole('checkbox').click();
-  await expect(active.locator('[data-check-row]')).toHaveCount(4);
+  await expect(active.locator('[data-check-row]')).toHaveCount(2);
   await expect(row(dialog, 'Parent').getByRole('checkbox')).toBeChecked();
   // A parent click follows its checkbox state even when a child was independently unchecked.
   await row(dialog, 'Parent').getByRole('checkbox').click();
@@ -377,44 +377,41 @@ test('a concurrent new child stays behind while the parent drag remains active',
   } finally { await remote.close(); }
 });
 
-test('outdenting checked children reveals the completed bucket and retains source selection or grip focus', async ({ page }) => {
-  const dialog = await createList(page, 'Nesting across completed buckets', ['Parent', 'Source child', 'Grip child', 'Pointer child', 'Done']);
-  for (const text of ['Source child', 'Grip child', 'Pointer child']) {
-    await indent(page, dialog, text);
-    await row(dialog, text).getByRole('checkbox').check();
-  }
-  await row(dialog, 'Done').getByRole('checkbox').click();
-  const completed = dialog.getByRole('list', { name: 'Completed checklist items', exact: true });
-  await dialog.getByRole('button', { name: '1 completed item', exact: true }).click();
-  await expect(completed).toHaveCount(0);
-  const source = row(dialog, 'Source child').getByRole('textbox');
+test('checked children retain nesting, logical order, and focus when outdented in the completed list', async ({ page }) => {
+  const dialog = await createList(page, 'Independent completed children', ['Parent', 'First', 'Second', 'Other']);
+  await indent(page, dialog, 'First');
+  await indent(page, dialog, 'Second');
+  const parentId = await row(dialog, 'Parent').getAttribute('data-check-row');
+  await row(dialog, 'Second').getByRole('checkbox').check();
+  await row(dialog, 'First').getByRole('checkbox').check();
+  await expect.poll(() => order(dialog)).toEqual(['Parent', 'Other', 'First', 'Second']);
+  await expect(row(dialog, 'First')).toHaveAttribute('data-parent-id', parentId!);
+  await page.getByRole('button', { name: 'Close', exact: true }).click();
+  const card = page.getByRole('article', { name: 'Open note: Independent completed children', exact: true });
+  await expect(card.getByRole('checkbox')).toHaveCount(2);
+  await card.getByRole('heading').click();
+  const source = row(dialog, 'First').getByRole('textbox');
   await source.click();
-  await source.evaluate(element => (element as HTMLTextAreaElement).setSelectionRange(2, 6, 'backward'));
+  await source.evaluate(element => (element as HTMLTextAreaElement).setSelectionRange(1, 3));
   await page.keyboard.press('Shift+Tab');
-  await expect(completed.locator('[data-check-row]')).toHaveCount(4);
   await expect(source).toBeFocused();
-  await expect.poll(() => source.evaluate(element => ({ start: (element as HTMLTextAreaElement).selectionStart, end: (element as HTMLTextAreaElement).selectionEnd, direction: (element as HTMLTextAreaElement).selectionDirection }))).toEqual({ start: 2, end: 6, direction: 'backward' });
-  await expect(row(dialog, 'Source child')).not.toHaveClass(/is-child/);
-  for (const text of ['Grip child', 'Pointer child']) await expect(row(dialog, text)).toHaveAttribute('data-parent-id', (await row(dialog, 'Source child').getAttribute('data-check-row'))!);
-  await grip(dialog, 'Source child').focus();
+  await expect(row(dialog, 'First')).not.toHaveClass(/is-child/);
+  await expect.poll(() => source.evaluate(element => (element as HTMLTextAreaElement).selectionStart)).toBe(1);
+  await grip(dialog, 'First').focus();
   await page.keyboard.press('Control+z');
-  await expect(completed.locator('[data-check-row]')).toHaveCount(1);
-  await dialog.getByRole('button', { name: '1 completed item', exact: true }).click();
-  await grip(dialog, 'Grip child').focus();
-  await page.keyboard.press('ArrowLeft');
-  await expect(completed.locator('[data-check-row]')).toHaveCount(3);
-  await expect(grip(dialog, 'Grip child')).toBeFocused();
-  await expect(row(dialog, 'Pointer child')).toHaveAttribute('data-parent-id', (await row(dialog, 'Grip child').getAttribute('data-check-row'))!);
-  await page.keyboard.press('Control+z');
-  await expect(completed.locator('[data-check-row]')).toHaveCount(1);
-  await dialog.getByRole('button', { name: '1 completed item', exact: true }).click();
-  await drag(page, grip(dialog, 'Pointer child'), row(dialog, 'Pointer child'), 'root');
-  await expect(completed.locator('[data-check-row]')).toHaveCount(2);
-  await expect(grip(dialog, 'Pointer child')).toBeFocused();
-  await expect(row(dialog, 'Pointer child')).not.toHaveClass(/is-child/);
+  await expect(row(dialog, 'First')).toHaveAttribute('data-parent-id', parentId!);
+  // This bucket has no top-level row: dragging must still calculate its depth.
+  const handle = grip(dialog, 'Second'), box = (await handle.boundingBox())!;
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(box.x - 35, box.y + box.height / 2, { steps: 5 });
+  await page.mouse.up();
+  await expect(row(dialog, 'Second')).not.toHaveClass(/is-child/);
+  await row(dialog, 'First').getByRole('checkbox').uncheck();
+  await expect.poll(() => order(dialog)).toEqual(['Parent', 'First', 'Other', 'Second']);
 });
 
-test('Backspace on the last unchecked child reveals and focuses the newly completed family', async ({ page }) => {
+test('Backspace on the last unchecked child focuses the add field without expanding completed rows', async ({ page }) => {
   const dialog = await createList(page, 'Backspace completes family', ['Parent', 'Child', 'Done']);
   await indent(page, dialog, 'Child');
   await row(dialog, 'Parent').getByRole('checkbox').click();
@@ -424,13 +421,14 @@ test('Backspace on the last unchecked child reveals and focuses the newly comple
   const empty = row(dialog, 'list item');
   await expect(empty.getByRole('textbox')).toBeFocused();
   await expect(row(dialog, 'Parent').getByRole('checkbox')).toBeChecked();
-  await dialog.getByRole('button', { name: '1 completed item', exact: true }).click();
+  await dialog.getByRole('button', { name: '3 completed items', exact: true }).click();
   const completed = dialog.getByRole('list', { name: 'Completed checklist items', exact: true });
   await expect(completed).toHaveCount(0);
   await empty.getByRole('textbox').click();
   await page.keyboard.press('Backspace');
   await expect(empty).toHaveCount(0);
-  await expect(completed.locator('[data-check-row]')).toHaveCount(3);
-  await expect(row(dialog, 'Child').getByRole('textbox')).toBeFocused();
-  await expect(row(dialog, 'Child').getByRole('textbox')).toHaveValue('Child');
+  await expect(completed).toHaveCount(0);
+  await expect(dialog.getByRole('textbox', { name: 'New list item', exact: true })).toBeFocused();
+  await dialog.getByRole('button', { name: '3 completed items', exact: true }).click();
+  await expect(row(dialog, 'Child').getByRole('textbox')).toHaveText('Child');
 });
