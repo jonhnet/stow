@@ -44,6 +44,7 @@ class DemoStore implements AppStore {
     this.listeners.forEach(listener => listener());
   };
   subscribe = (listener: () => void) => { this.listeners.add(listener); return () => { this.listeners.delete(listener); }; };
+  async getBackgroundResult() { return undefined; }
   getSnapshot = () => this.snapshot;
   async reloadAccount() { location.reload(); }
 

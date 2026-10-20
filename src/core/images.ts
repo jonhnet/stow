@@ -18,7 +18,7 @@ export type ImageOptions = {
   assertAccount(): void;
   isOnline(): boolean;
   signal: AbortSignal;
-  onAuthError(message: string): void;
+  onAuthError(message: string, status: number): void;
   onError(message: string | null): void;
   onChange?(): void;
   budgetBytes?: number;
@@ -151,7 +151,7 @@ export class ImageStore {
     });
     if (response.type === 'opaqueredirect' || (response.status >= 300 && response.status < 400) || [401, 403, 409].includes(response.status)) {
       const message = 'Your image account could not be verified. Your pending images remain in this account. Reload after signing in.';
-      this.options.onAuthError(message);
+      this.options.onAuthError(message, response.status);
       throw new Error(message);
     }
     this.check();

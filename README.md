@@ -8,7 +8,8 @@ editing. It can be installed as an app (PWA) on Android.
 Installed apps can refresh notes while closed when the browser grants Periodic
 Background Sync permission. Stow requests opportunities at least an hour apart;
 the browser chooses the actual timing and may not run them. Settings shows
-eligibility and the last successful sync on this device. Background refresh
+eligibility, the last successful sync, and the background worker’s last attempt,
+success, and error on this device. Registration does not mean a refresh has run. Background refresh
 downloads note content and metadata, preserves pending local edits and Undo, and
 requires a still-valid sign-in. Image fetching and uploading local edits happen
 when Stow is open. Before relying on a newly edited note offline, open Stow on that

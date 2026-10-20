@@ -211,12 +211,12 @@ test('obsolete password-cache import hints cannot import notes during startup or
   } finally { await owner.close(); }
 });
 
-for (const status of [500, 502, 503, 504]) test(`HTTP ${status} during session verification retries without opening the cached account`, async ({ browser }) => {
+for (const status of [500, 502, 503, 504]) test(`HTTP ${status} during session verification keeps cached notes editable while retrying`, async ({ browser }) => {
   const context = await userContext(browser, `retry-session-${status}@example.test`);
   try {
     const page = await context.newPage();
     await ready(page);
-    await note(page, 'Await verified session', 'Only reopen after the account is verified.');
+    await note(page, 'Await verified session', 'Previously verified local notes stay accessible.');
     await watchDatabaseOpens(context);
     let unavailable = true, requests = 0;
     await page.route('**/api/session', route => {
@@ -224,10 +224,12 @@ for (const status of [500, 502, 503, 504]) test(`HTTP ${status} during session v
       return unavailable ? route.fulfill({ status, contentType: 'text/html', body: '<html>Backend unavailable</html>' }) : route.continue();
     });
     await page.reload();
-    await expect(page.getByText(`The server is temporarily unavailable (HTTP ${status}). Retrying…`)).toBeVisible();
+    await expect(page.locator('.error-banner')).toContainText(`The server is temporarily unavailable (HTTP ${status}). Retrying…`);
     await expect.poll(() => requests).toBeGreaterThanOrEqual(2);
-    expect(await page.evaluate(() => Reflect.get(window, 'stowOpenedDatabases'))).toEqual([]);
-    await expect(card(page, 'Await verified session')).toHaveCount(0);
+    await expect(card(page, 'Await verified session')).toBeVisible();
+    await note(page, 'Edited during outage', 'Stored locally while the backend is unavailable.');
+    await page.reload();
+    await expect(card(page, 'Edited during outage')).toBeVisible();
     expect(await page.evaluate(() => localStorage.getItem('stow-account-v1'))).not.toBeNull();
     unavailable = false;
     await expect(page.locator('.sync-state')).toHaveAttribute('title', 'Connected');
@@ -258,7 +260,7 @@ test('session unavailability preserves an open vault but verifies a changed acco
   } finally { await context.close(); }
 });
 
-for (const denial of ['missing identity', 'login redirect', 'malformed session']) test(`a ${denial} response never opens the cached account`, async ({ browser }) => {
+for (const denial of ['missing identity', 'login redirect', 'malformed session']) test(`cached account handling after ${denial}`, async ({ browser }) => {
   const context = await userContext(browser, `denied-${denial.replaceAll(' ', '-')}@example.test`);
   try {
     const page = await context.newPage();
@@ -274,10 +276,94 @@ for (const denial of ['missing identity', 'login redirect', 'malformed session']
     else if (denial === 'login redirect') await page.route('**/api/session', route => route.fulfill({ status: 302, headers: { Location: 'https://login.example.invalid/signin' } }));
     else await page.route('**/api/session', route => route.fulfill({ status: 200, contentType: 'text/html', body: '<html>Unexpected response</html>' }));
     await page.reload();
+    if (denial !== 'malformed session') {
+      await expect(card(page, 'Cached but locked')).toBeVisible();
+      await expect(page.getByRole('status', { name: 'Sign in required' })).toBeVisible();
+      return;
+    }
     await expect(page.getByRole('button', { name: 'Take a note…', exact: true })).toHaveCount(0);
     await expect(card(page, 'Cached but locked')).toHaveCount(0);
     await expect(page.getByText(/proxy|authentication|sign in/i).first()).toBeVisible();
     expect(await page.evaluate(() => Reflect.get(window, 'stowOpenedDatabases'))).toEqual([]);
     expect(await page.evaluate(async () => (await indexedDB.databases()).some(db => db.name?.startsWith('stow-notes-')))).toBe(true);
+  } finally { await context.close(); }
+});
+
+for (const resumeAs of ['same', 'different']) test(`expired sign-in keeps offline edits through reload and resumes as ${resumeAs} account`, async ({ browser }, info) => {
+  const user = `expiry-${info.testId}@example.test`;
+  const context = await userContext(browser, user);
+  try {
+    const page = await context.newPage(); await ready(page);
+    await note(page, 'Local original', 'Already downloaded.');
+    await context.setOffline(true); await context.clearCookies(); await context.setOffline(false);
+    await expect(page.getByRole('status', { name: 'Sign in required' })).toBeVisible();
+    await expect(card(page, 'Local original')).toBeVisible();
+    await note(page, 'Saved while signed out', 'Must stay with the original account.');
+    await page.reload();
+    await expect(card(page, 'Saved while signed out')).toBeVisible();
+    await expect(page.getByRole('status', { name: 'Sign in required' })).toBeVisible();
+    if (process.env.VITE_STOW_LOGIN_URL) {
+      const signIn = page.getByRole('link', { name: 'Sign in', exact: true });
+      await expect(signIn).toHaveAttribute('href', process.env.VITE_STOW_LOGIN_URL);
+      await expect(signIn).toHaveAttribute('target', '_blank');
+    }
+    await setUser(context, resumeAs === 'same' ? user : `${user}-other`);
+    await context.setOffline(true); await context.setOffline(false);
+    if (resumeAs === 'same') {
+      await expect(page.locator('.sync-state')).toHaveAttribute('title', 'Connected');
+      await expect(page.getByRole('status', { name: 'Sign in required' })).toHaveCount(0);
+    } else {
+      await expect(page.getByText(/signed-in account changed/)).toBeVisible();
+      await page.reload(); await expect(page.locator('.sync-state')).toHaveAttribute('title', 'Connected');
+      await expect(card(page, 'Saved while signed out')).toHaveCount(0);
+      await setUser(context, user); await page.reload();
+      await expect(card(page, 'Saved while signed out')).toBeVisible();
+      await expect(page.locator('.sync-state')).toHaveAttribute('title', 'Connected');
+    }
+    const remote = await userContext(browser, user);
+    try {
+      const reader = await remote.newPage(); await ready(reader);
+      await expect(card(reader, 'Saved while signed out')).toBeVisible();
+    } finally { await remote.close(); }
+  } finally { await context.close(); }
+});
+
+test('a signed-out fresh browser offers sign-in without a misleading reload action', async ({ browser }) => {
+  test.skip(!process.env.VITE_STOW_LOGIN_URL, 'Requires the configured SSO build fixture.');
+  const context = await browser.newContext();
+  try {
+    const page = await context.newPage(); await page.goto(ORIGIN);
+    await expect(page.getByRole('link', { name: 'Sign in', exact: true })).toHaveAttribute('href', process.env.VITE_STOW_LOGIN_URL!);
+    await expect(page.getByRole('button', { name: 'Reload Stow', exact: true })).toHaveCount(0);
+    await expect(page.getByRole('heading', { name: 'Sign in to Stow' })).toBeVisible();
+  } finally { await context.close(); }
+});
+
+for (const rejected of ['storage', 'image']) test(`a ${rejected} request discovering expired auth preserves local editing`, async ({ browser }, info) => {
+  const context = await userContext(browser, `http-auth-${info.testId}@example.test`);
+  try {
+    const page = await context.newPage(); await ready(page);
+    await note(page, 'Retained offline', 'Local content survives HTTP auth failure.');
+    const deny = { status: 401, contentType: 'application/json', body: JSON.stringify({ authenticated: false, required: true, authMode: 'proxy' }) };
+    await page.route('**/api/session', route => route.fulfill(deny));
+    if (rejected === 'storage') {
+      await page.route('**/api/storage', route => route.fulfill(deny));
+      await page.getByRole('button', { name: 'Settings', exact: true }).click();
+      await page.getByRole('button', { name: 'Storage and history', exact: true }).click();
+      await expect(page.locator('.sign-in-notice')).toBeAttached();
+      await page.getByRole('dialog', { name: 'Storage and history', exact: true }).getByRole('button', { name: 'Close storage settings', exact: true }).click();
+    } else {
+      await page.route('**/api/blobs/**', route => route.fulfill(deny));
+      await card(page, 'Retained offline').click();
+      const editor = page.getByRole('dialog', { name: 'Edit note', exact: true });
+      await editor.locator('input[type=file]').setInputFiles({ name: 'offline.png', mimeType: 'image/png', buffer: Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAACXBIWXMAAAPoAAAD6AG1e1JrAAAADUlEQVQImWP4////fwAJ+wP9CNHoHgAAAABJRU5ErkJggg==', 'base64') });
+      await expect(page.locator('.sign-in-notice')).toBeAttached();
+      await expect(editor.locator('img')).toBeVisible();
+      await editor.getByRole('button', { name: 'Close', exact: true }).click();
+    }
+    await note(page, 'Still editable', 'Saved after server rejection.');
+    await page.reload();
+    await expect(card(page, 'Still editable')).toBeVisible();
+    if (rejected === 'image') await expect(card(page, 'Retained offline').locator('img')).toBeVisible();
   } finally { await context.close(); }
 });

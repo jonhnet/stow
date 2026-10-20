@@ -96,3 +96,14 @@ test('background refresh refuses shared scope before opening storage or requesti
   assert.equal(fetch.mock.callCount(), 0);
   assert.deepEqual(await indexedDB.databases(), []);
 });
+
+test('background diagnostics report attempts independently of foreground sync and isolate accounts', async () => {
+  const { readBackgroundResult, openBackgroundDatabase } = await import('../src/core/background-state');
+  assert.equal(await readBackgroundResult(account), null);
+  const result = { attemptedAt: 2000, completedAt: 1000, error: 'Background sync could not verify the account (HTTP 401). Open Stow to sign in.' };
+  const db = await openBackgroundDatabase();
+  try { await db.put('results', result, account.vaultId); } finally { db.close(); }
+  assert.deepEqual(await readBackgroundResult(account), result);
+  assert.equal(await readBackgroundResult({ ...account, vaultId: 'another-account-12345' }), null);
+  await assert.rejects(readBackgroundResult({ ...account, principalId: 'shared-participant-123' }), /document scope/);
+});

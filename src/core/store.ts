@@ -11,6 +11,7 @@ import { StorageUpdateRequired } from './persistence-database';
 import { browserEditOwnership } from './edit-ownership';
 import { TabSync, tabChannelName } from './tab-sync';
 import { registerBackgroundSync, type BackgroundAvailability } from '../background-registration';
+import { readBackgroundResult } from './background-state';
 import { Vault } from './vault';
 import { ImageStore, type ImageProgress } from './images';
 import { getPermanentDeletionBlobCandidates, PERMANENT_DELETION_ORIGIN } from './deletion';
@@ -28,6 +29,7 @@ export interface Snapshot {
   canUndo: boolean; canRedo: boolean; pending: number; localPending: number;
   images: ImageProgress;
   syncRejection: SyncRejection | null; automaticReload: boolean;
+  signInRequired?: boolean;
   lastSyncAt?: number;
   backgroundSync?: BackgroundAvailability;
 }
@@ -92,6 +94,7 @@ export class StowStore {
   private replicationScheduled = false;
   private parked = false;
   private backgroundSync?: BackgroundAvailability;
+  private signInRequired = false;
 
   constructor(readonly shared?: SharedReference) {
     window.addEventListener('compositionstart', () => { this.composing = true; }, true);
@@ -204,6 +207,7 @@ export class StowStore {
     this.snapshot = {
       notes: visible ? this.vault.getNotes() : [], historyVersion: visible ? this.historyVersion : 0,
       labels: visible ? this.vault.getLabels() : [],
+      signInRequired: this.signInRequired,
       status: this.status, ready: this.ready, access: this.access, authMode: this.authMode,
       user: visible ? this.account?.user : undefined, accessMessage: this.accessMessage,
       error: this.localError ?? this.imageError ?? this.error, historyError: visible ? this.historyError : null,
@@ -266,7 +270,19 @@ export class StowStore {
     transfer?.close(); socket?.close();
   }
 
+  private pauseForSignIn() {
+    this.signInRequired = true;
+    this.closeSocket(); this.requests.clear();
+    clearTimeout(this.imageTimer);
+    this.status = this.account ? 'offline' : 'locked';
+    this.error = null; this.imageError = null;
+    this.accessMessage = this.account ? null : 'Sign in to download your notes.';
+    if (!this.account) this.access = 'locked';
+    this.refresh(); this.scheduleReconnect();
+  }
+
   private block(message: string) {
+    this.signInRequired = false;
     this.updateReload?.stop(); this.updateReload = undefined; this.syncRejection = null;
     this.vault.finishEdit();
     this.access = 'blocked';
@@ -355,10 +371,9 @@ export class StowStore {
       },
       isOnline: () => this.access === 'ready' && this.status === 'online',
       signal: this.accountAbort.signal,
-      onAuthError: message => {
-        try { localStorage.removeItem(this.accountKey); }
-        catch { this.error = 'Browser storage could not clear the previous account. Restore browser storage before reopening Stow.'; }
-        this.block(message);
+      onAuthError: (message, status) => {
+        if (!this.shared && status !== 409) this.pauseForSignIn();
+        else this.block(message);
       },
       onError: message => { this.imageError = message; this.refresh(); },
       onChange: () => this.refresh(),
@@ -442,6 +457,7 @@ export class StowStore {
         this.block('Your signed-in account changed. Your edits remain in the previous account’s local vault. Reload to open the current account.');
         return;
       }
+      this.signInRequired = false;
       // A socket may reject sync while this session request is in flight.
       // Its late approval must not restart sync or reset the update notice.
       if (this.syncStopped) return;
@@ -536,14 +552,8 @@ export class StowStore {
         this.rejectSync(this.account, { code: 'client_update_required', action: 'reload', target: 'browser-storage', message: error.message });
         return;
       }
-      if (error instanceof ServerUnavailableError) {
-        // Retry availability failures without treating them as authentication
-        // or as permission to open an unverified account from the local cache.
-        this.closeSocket();
-        if (!this.account) this.accessMessage = null;
-        this.error = error.message; this.status = 'connecting';
-        this.refresh(); this.scheduleReconnect();
-      } else if (error instanceof NetworkError) {
+      if (error instanceof NetworkError || error instanceof ServerUnavailableError) {
+        this.error = error instanceof ServerUnavailableError ? error.message : null;
         this.closeSocket();
         if (!this.account) {
           try {
@@ -559,8 +569,27 @@ export class StowStore {
           }
         }
         this.status = 'offline'; this.refresh(); this.scheduleReconnect();
+      } else if (!this.shared && error instanceof SessionError && error.authMode === 'proxy' && error.locked) {
+        // Missing authentication pauses server access, not access to this device's
+        // already-bound offline vault. Every reconnect still verifies identity.
+        this.authMode = error.authMode;
+        this.signInRequired = true;
+        this.closeSocket();
+        if (!this.account) {
+          try {
+            const account = this.cachedAccount();
+            if (account) await this.openAccount(account);
+          } catch (storageError) {
+            if (storageError instanceof StorageUpdateRequired && this.account) this.rejectSync(this.account, {
+              code: 'client_update_required', action: 'reload', target: 'browser-storage', message: storageError.message,
+            });
+            else this.block(storageError instanceof Error ? storageError.message : 'Could not open your offline vault.');
+            return;
+          }
+        }
+        if (!this.syncStopped && this.getSnapshot().access !== 'blocked' && !this.parked) this.pauseForSignIn();
       } else {
-        // An HTTP/authentication/format failure is not permission to open a cached vault.
+        // Malformed identities must not open cached storage.
         try { localStorage.removeItem(this.accountKey); }
         catch { this.error = 'Browser storage could not clear the previous account. Restore browser storage before reopening Stow.'; }
         if (error instanceof SessionError && error.authMode) this.authMode = error.authMode;
@@ -680,8 +709,8 @@ export class StowStore {
     });
     this.requireAccount();
     if (response.type === 'opaqueredirect' || response.status === 401 || response.status === 403) {
-      const message = 'Sign in to the same account, then reload Stow before managing storage.';
-      this.block(message);
+      const message = 'Sign in to the same account to manage server storage. Your local notes are still available.';
+      if (this.shared) this.block(message); else this.pauseForSignIn();
       throw new Error(message);
     }
     const result = await response.json();
@@ -792,14 +821,14 @@ export class StowStore {
   }
 
   private scheduleImages() {
-    if (this.access !== 'ready' || this.syncStopped) return;
+    if (this.access !== 'ready' || this.syncStopped || this.signInRequired) return;
     this.imagesDirty = true;
     clearTimeout(this.imageTimer);
     this.imageTimer = setTimeout(() => void this.syncImages(), 300);
   }
 
   private async syncImages() {
-    if (this.syncingImages || this.access !== 'ready' || this.syncStopped) return;
+    if (this.syncingImages || this.access !== 'ready' || this.syncStopped || this.signInRequired) return;
     this.syncingImages = true;
     this.imagesDirty = false;
     try {
@@ -810,7 +839,7 @@ export class StowStore {
       this.requireAccount();
       this.refresh();
     } catch (error) {
-      if (this.access !== 'ready' || this.syncStopped) return;
+      if (this.access !== 'ready' || this.syncStopped || this.signInRequired) return;
       this.imageError = error instanceof Error ? error.message : 'Images will sync when the connection returns.';
       this.refresh();
       this.imageTimer = setTimeout(() => void this.syncImages(), 10000);
@@ -818,6 +847,14 @@ export class StowStore {
       this.syncingImages = false;
       if (this.imagesDirty) this.scheduleImages();
     }
+  }
+
+  async getBackgroundResult() {
+    if (this.shared) return undefined;
+    const account = this.requireAccount();
+    const result = await readBackgroundResult(account);
+    this.requireAccount();
+    return result;
   }
 
   verifiedAccountId() {

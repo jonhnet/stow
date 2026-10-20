@@ -20,3 +20,10 @@ export async function rememberBackgroundAccount(account: Account) {
   const db = await openBackgroundDatabase();
   try { await db.put('account', account, 'active'); } finally { db.close(); }
 }
+
+/** Read diagnostics for this private account, without changing refresh eligibility. */
+export async function readBackgroundResult(account: Account): Promise<BackgroundResult | null> {
+  assertAccountScope(account);
+  const db = await openBackgroundDatabase();
+  try { return await db.get('results', account.vaultId) ?? null; } finally { db.close(); }
+}

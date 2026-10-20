@@ -19,10 +19,11 @@ check format cargo fmt --all -- --check
 check hosting python3 -B -m unittest discover -s tests/hosting -p 'test_*.py'
 check clippy cargo clippy --locked --all-targets --all-features -- -D warnings
 check tests npm test
+export VITE_STOW_LOGIN_URL='https://login.example.invalid/signin'
 check build npm run build
 check tools python3 scripts/check-tools.py
 check browser npm run test:e2e
-check browser-sync-firefox env STOW_TEST_BROWSER=firefox npm run test:e2e -- sync-schedules.spec.ts client-update.spec.ts sharing.spec.ts
+check browser-sync-firefox env STOW_TEST_BROWSER=firefox npm run test:e2e -- sync-schedules.spec.ts client-update.spec.ts sharing.spec.ts users.spec.ts background-sync.spec.ts
 check demo-build npm run build:demo
 check demo-chromium npm run test:demo
 check demo-firefox env STOW_TEST_BROWSER=firefox npm run test:demo

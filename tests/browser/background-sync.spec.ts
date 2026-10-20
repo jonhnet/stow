@@ -57,3 +57,34 @@ test('periodic sync fetches a remote note with every Stow window closed, then op
     await expect(offline.getByText(/Last synced on this device:/)).toBeVisible();
   } finally { await context.close(); await writer.close(); }
 });
+
+test('settings distinguishes background registration from attempts, failures, and success', async ({ browser }, info) => {
+  const context = await browser.newContext();
+  try {
+    await context.addCookies([{ name: 'stow_test_user', value: `background-status-${info.testId}`, url: 'http://localhost:4174' }]);
+    const page = await context.newPage(); await page.goto('http://localhost:4174');
+    await expect(page.locator('.sync-state')).toHaveAttribute('title', 'Connected');
+    const settings = page.getByRole('button', { name: 'Settings', exact: true });
+    await settings.click();
+    await expect(page.getByText('Background refresh: no attempts recorded on this device.', { exact: true })).toBeVisible();
+    await settings.click();
+    await page.evaluate(async () => {
+      const account = JSON.parse(localStorage.getItem('stow-account-v1')!);
+      const request = indexedDB.open('stow-background-v1');
+      const db = await new Promise<IDBDatabase>((resolve, reject) => { request.onsuccess = () => resolve(request.result); request.onerror = () => reject(request.error); });
+      try {
+        await new Promise<void>((resolve, reject) => {
+          const transaction = db.transaction('results', 'readwrite');
+          transaction.objectStore('results').put({ attemptedAt: 2000, completedAt: 1000, error: 'Background session rejected (HTTP 401)' }, account.vaultId);
+          transaction.oncomplete = () => resolve(); transaction.onabort = () => reject(transaction.error);
+        });
+      } finally { db.close(); }
+    });
+    // Foreground sync must not erase the last background failure.
+    await page.reload(); await expect(page.locator('.sync-state')).toHaveAttribute('title', 'Connected');
+    await settings.click();
+    await expect(page.getByText(/^Last background attempt:/)).toBeVisible();
+    await expect(page.getByText(/^Last background success:/)).toBeVisible();
+    await expect(page.getByText('Last background error: Background session rejected (HTTP 401)', { exact: true })).toBeVisible();
+  } finally { await context.close(); }
+});

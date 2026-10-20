@@ -98,18 +98,20 @@ test('a locally retained image rejected by the old proxy uploads after fixing th
     await dropImage(page);
     const response = await rejected;
     expect(response.status()).toBe(403);
-    // Blocking the image account aborts its fetch before CDP can read the body.
     // The HTTP regression checks the server's exact origin-rejection response.
+    // A rejected upload pauses syncing without hiding the local note or image.
     expect(await response.request().headerValue('origin')).toBe(server.origin);
-    await expect(page.getByRole('heading', { name: 'Your account changed', exact: true })).toBeVisible();
+    await expect(page.locator('.sign-in-notice')).toBeVisible();
+    await expect(card(page, title)).toBeVisible();
     const hash = new URL(response.url()).pathname.split('/').at(-1)!;
     expect(await cachedImage(page, vaultId, hash)).toEqual({ uploaded: 0, bytes: [...png] });
 
     // Reload alone cannot repair the bad proxy, but it must retain the upload.
     const rejectedAgain = page.waitForResponse(upload);
-    await page.getByRole('button', { name: 'Reload Stow', exact: true }).click();
+    await page.reload();
     expect((await rejectedAgain).status()).toBe(403);
-    await expect(page.getByRole('heading', { name: 'Your account changed', exact: true })).toBeVisible();
+    await expect(page.locator('.sign-in-notice')).toBeVisible();
+    await expect(card(page, title)).toBeVisible();
     expect(await cachedImage(page, vaultId, hash)).toEqual({ uploaded: 0, bytes: [...png] });
 
     // Restore the repository's real configuration, keeping the same server vault

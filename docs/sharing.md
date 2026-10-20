@@ -54,7 +54,10 @@ server-signed, HttpOnly guest cookie for sync and blob access.
 The **Open my collection** link goes to `/`; password-mode installations offer
 login there. For SSO installations, set the public build variable
 `VITE_STOW_LOGIN_URL` to your auth checker's login URL to show a **Sign in** link
-beside it. After signing in, reopen the sharing link and choose **Add to my notes**.
+beside it, and a yellow **Sign in** button when proxy authentication expires.
+The expired-session button opens a separate tab so pending local edits stay open.
+Downloaded private notes remain editable offline; synchronization resumes only
+after verifying the same account. After signing in, reopen the sharing link and choose **Add to my notes**.
 Stow does not place the sharing capability in a login redirect's query string.
 The external auth checker and its anonymous-pass-through mode are outside this
 repository; the operator must enable that mode before guests can reach Stow.
