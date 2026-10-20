@@ -29,6 +29,7 @@ export interface Snapshot {
   canUndo: boolean; canRedo: boolean; pending: number; localPending: number;
   images: ImageProgress;
   syncRejection: SyncRejection | null; automaticReload: boolean;
+  membershipVersion?: number;
   signInRequired?: boolean;
   lastSyncAt?: number;
   backgroundSync?: BackgroundAvailability;
@@ -58,6 +59,7 @@ export class StowStore {
   private error: string | null = null;
   private historyError: string | null = null;
   private historyVersion = 0;
+  private membershipVersion = 0;
   private historyBoundaries: HistoryBoundary[] = [];
   private historyPreviews = new Map<symbol, Attachment[]>();
   private localError: string | null = null;
@@ -207,6 +209,7 @@ export class StowStore {
     this.snapshot = {
       notes: visible ? this.vault.getNotes() : [], historyVersion: visible ? this.historyVersion : 0,
       labels: visible ? this.vault.getLabels() : [],
+      membershipVersion: this.membershipVersion,
       signInRequired: this.signInRequired,
       status: this.status, ready: this.ready, access: this.access, authMode: this.authMode,
       user: visible ? this.account?.user : undefined, accessMessage: this.accessMessage,
@@ -500,6 +503,7 @@ export class StowStore {
             let message: ReturnType<typeof unpackSync>;
             try { message = unpackSync(data); Y.decodeStateVector(message.vector); }
             catch (error) { this.block(error instanceof Error ? error.message : 'Invalid server snapshot.'); throw error; }
+            this.membershipVersion++;
             startupMark('sync-received'); startupMark('sync-apply-start');
             Y.applyUpdate(this.vault.doc, message.update, 'remote');
             startupMark('sync-apply-end');
@@ -509,7 +513,11 @@ export class StowStore {
             this.status = 'online'; this.retryDelay = 1000; this.error = null;
             this.scheduleImages();
           } else if (kind === 'update') Y.applyUpdate(this.vault.doc, data, 'remote');
-          else if (kind === 'history-changed') { this.historyVersion++; this.historyError = null; }
+          else if (kind === 'history-changed') {
+            const notice = JSON.parse(new TextDecoder().decode(data));
+            if (notice.membership) this.membershipVersion++;
+            else { this.historyVersion++; this.historyError = null; }
+          }
           else if (kind === 'history-failure') {
             const notice = JSON.parse(new TextDecoder().decode(data));
             this.historyError = typeof notice.message === 'string' ? notice.message : 'A saved version could not be recorded. Current notes are still saved.';

@@ -690,3 +690,155 @@ async fn maintenance_removes_unpublished_crash_artifacts_without_touching_publis
     );
     server.close().await.unwrap();
 }
+
+#[tokio::test]
+async fn membership_follows_references_not_join_history() {
+    use crate::server::sharing;
+    let dir = TempDir::new().unwrap();
+    let (server, alice) = seed_publication(dir.path()).await;
+    let h = shared_headers("jeremy");
+    let joined = request(&server, "POST", "/api/shares/join", &h, vec![])
+        .await
+        .json();
+    let jeremy = string(&joined["participant"]["id"]);
+    let mut guest = HeaderMap::new();
+    guest.insert("x-stow-share", cap().parse().unwrap());
+    request(&server, "POST", "/api/shares/join", &guest, vec![]).await;
+    let roster = request(&server, "GET", "/api/shares/participants", &h, vec![])
+        .await
+        .json();
+    assert_eq!(
+        roster["participants"].as_array().unwrap().len(),
+        1,
+        "opening a link is not membership"
+    );
+    assert_eq!(roster["participants"][0]["id"], alice);
+    let mut add = h.clone();
+    add.insert("x-stow-vault", jeremy.parse().unwrap());
+    assert_eq!(
+        request(&server, "POST", "/api/shares/add", &add, vec![])
+            .await
+            .status,
+        200
+    );
+    let refs = new_doc();
+    for id in ["one", "two"] {
+        note(&refs, id, "reference");
+        meta(
+            &refs,
+            id,
+            "share",
+            json!({"id":SHARED,"token":"a".repeat(64)}),
+        );
+        meta(&refs, id, "trashed", json!(true));
+    }
+    sharing::reconcile(&server.state, jeremy, &refs).unwrap();
+    for remaining in [2, 1, 0] {
+        let roster = request(&server, "GET", "/api/shares/participants", &h, vec![])
+            .await
+            .json();
+        assert_eq!(
+            roster["participants"].as_array().unwrap().len(),
+            if remaining > 0 { 2 } else { 1 }
+        );
+        if remaining > 0 {
+            let id = if remaining == 2 { "one" } else { "two" };
+            put(&mut refs.transact_mut(), "deletedNotes", id, json!(true));
+            sharing::reconcile_changes(
+                &server.state,
+                jeremy,
+                &refs,
+                Some(&[id.to_owned()].into_iter().collect()),
+            )
+            .unwrap();
+        }
+    }
+    // A forged reference never grants membership, even for an authenticated account.
+    note(&refs, "forged-member", "reference");
+    meta(
+        &refs,
+        "forged-member",
+        "share",
+        json!({"id":SHARED,"token":"b".repeat(64)}),
+    );
+    sharing::dirty(&server.state, jeremy).unwrap();
+    assert_eq!(
+        request(&server, "GET", "/api/shares/participants", &h, vec![])
+            .await
+            .status,
+        503
+    );
+    sharing::reconcile(&server.state, jeremy, &refs).unwrap();
+    assert_eq!(
+        request(&server, "GET", "/api/shares/participants", &h, vec![])
+            .await
+            .json()["participants"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+    // Old append-only records must not resurrect a former member or guest.
+    let path = dir.path().join("sharing").join(format!("{SHARED}.json"));
+    let mut old: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+    old["participants"] = json!({"obsolete":{"id":"obsolete","name":"Old guest","guest":true}});
+    fs::write(&path, serde_json::to_vec(&old).unwrap()).unwrap();
+    let roster = request(&server, "GET", "/api/shares/participants", &h, vec![])
+        .await
+        .json();
+    assert_eq!(roster["participants"].as_array().unwrap().len(), 1);
+    // The actual retained private reference still makes Add idempotent.
+    assert_eq!(
+        request(&server, "POST", "/api/shares/add", &add, vec![])
+            .await
+            .status,
+        200
+    );
+    assert_eq!(
+        request(&server, "GET", "/api/shares/participants", &h, vec![])
+            .await
+            .json()["participants"]
+            .as_array()
+            .unwrap()
+            .len(),
+        2
+    );
+    server.close().await.unwrap();
+}
+
+#[tokio::test]
+async fn membership_recovers_a_deletion_committed_before_index_reconciliation() {
+    let dir = TempDir::new().unwrap();
+    let (server, alice) = seed_publication(dir.path()).await;
+    server.close().await.unwrap();
+    let mut vault = Vault::open(&dir.path().join("users").join(&alice), 2.0).unwrap();
+    let doc = clone_doc(&vault.doc).unwrap();
+    put(&mut doc.transact_mut(), "deletedNotes", SHARED, json!(true));
+    vault.accept(&encode(&doc), 3.0).unwrap();
+    drop(vault);
+    fs::write(
+        dir.path()
+            .join("share-references")
+            .join(format!("{alice}.dirty")),
+        b"1",
+    )
+    .unwrap();
+    let server = start(dir.path(), json!({})).await;
+    let response = request(
+        &server,
+        "GET",
+        "/api/shares/participants",
+        &shared_headers("alice"),
+        vec![],
+    )
+    .await;
+    assert_eq!(response.status, 200);
+    assert_eq!(response.json()["participants"], json!([]));
+    assert!(
+        !dir.path()
+            .join("share-references")
+            .join(format!("{alice}.dirty"))
+            .exists()
+    );
+    server.close().await.unwrap();
+}

@@ -322,6 +322,7 @@ pub struct ServerState {
     incarnations: account_reset::Incarnations,
     metadata_lock: Mutex<()>,
     sharing_lock: Mutex<()>,
+    membership_changes: tokio::sync::broadcast::Sender<Option<String>>,
     transfer_budget: Budget,
     failures: Mutex<HashMap<String, Attempt>>,
     reports: Mutex<Vec<Report>>,
@@ -676,6 +677,7 @@ pub async fn start(config: Config) -> Result<Running> {
         incarnations,
         metadata_lock: Mutex::new(()),
         sharing_lock: Mutex::new(()),
+        membership_changes: tokio::sync::broadcast::channel(128).0,
         transfer_budget: Budget::default(),
         failures: Mutex::new(HashMap::new()),
         reports: Mutex::new(Vec::new()),
@@ -1522,6 +1524,7 @@ fn application_failure(error: Error) -> transfer::Failure {
     }
 }
 async fn connection(state: Arc<ServerState>, vault_id: String, mut socket: WebSocket) {
+    let mut membership = state.membership_changes.subscribe();
     let id = state.next_client.fetch_add(1, Ordering::Relaxed);
     let (sender, mut receiver) = mpsc::channel(128);
     let slow = CancellationToken::new();
@@ -1552,6 +1555,13 @@ async fn connection(state: Arc<ServerState>, vault_id: String, mut socket: WebSo
     let outcome:std::result::Result<(),transfer::Failure>=async{loop{
         let frames=tokio::select!{
             _=state.shutdown.cancelled()=>break,
+            change=membership.recv(),if vault_id.starts_with("share_")=>{
+                // Reuse the metadata invalidation envelope understood by older clients.
+                if !matches!(change, Ok(Some(ref changed)) if changed != &vault_id) {
+                    client.notice(json!({"type":"history-changed","membership":true}));
+                }
+                continue;
+            },
             _=slow.cancelled()=>return Err(transfer::Failure::new("retry","Reconnect to catch up")),
             _=deadline.tick()=>{transfer.check_timeout()?;continue;},
             _=heartbeat.tick()=>{if !alive{break;}alive=false;vec![Message::Ping(vec![].into())]},

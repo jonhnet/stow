@@ -7,8 +7,13 @@ its request path. Treat the whole link as a password.
 
 Opening a link joins the shared document. **Add to my notes** explicitly adds a
 reference to an authenticated collection. Guests can edit without creating an
-account. The participant initials (or Anonymous Chicken for a guest) record who
-joined; they are not a presence indicator or an authorization list.
+account. Participant initials show authenticated accounts that currently retain a reference.
+Opening a link does not add an avatar; Add to my notes does. Archive and Trash
+still retain the note; permanent deletion removes the avatar after the server
+accepts the last reference removal. Guests do not appear. These are neither a
+presence indicator nor an authorization list: anyone with the link can edit.
+Open clients refresh on membership changes and reconnect. Membership comes from
+the same durable reference index used for retention, not from historical joins.
 
 Content, checklist order/nesting/checks, attachments, and content history are
 shared. Pinning, placement, color, labels, archive, and trash are personal.

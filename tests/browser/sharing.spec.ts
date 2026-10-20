@@ -182,3 +182,43 @@ test('a private-scope update rejection waits for a shared-scope pending local wr
     await expect(card(alice.page, 'Shared save survives reload')).toBeVisible();
   } finally { await alice.context.close(); }
 });
+
+test('member avatars follow saved references, including offline removal and reconnect', async ({ browser }, info) => {
+  const aliceName = `members-alice-${info.testId}`, bobName = `members-bob-${info.testId}`;
+  const alice = await participant(browser, aliceName), bob = await participant(browser, bobName), guest = await participant(browser);
+  const title = 'Retained membership';
+  const avatars = () => card(alice.page, title).locator('.participant-avatar');
+  try {
+    const url = await publish(alice.page, title);
+    await expect(avatars()).toHaveCount(1);
+    await bob.page.goto(url); await connected(bob.page);
+    await guest.page.goto(url); await connected(guest.page);
+    await expect(avatars()).toHaveCount(1);
+    await expect(avatars().first()).toHaveAttribute('aria-label', aliceName);
+    await bob.page.getByRole('button', { name: 'Add to my notes', exact: true }).click();
+    await expect(bob.page).toHaveURL(`${ORIGIN}/`); await connected(bob.page);
+    // No owner navigation or content edit is needed to refresh the roster.
+    await expect(avatars()).toHaveCount(2);
+    await expect(avatars().filter({ hasNotText: '🐔' })).toHaveCount(2);
+    await card(bob.page, title).click();
+    await editor(bob.page).getByRole('button', { name: 'More note actions', exact: true }).click();
+    await editor(bob.page).getByRole('button', { name: 'Move to trash', exact: true }).click();
+    await connected(bob.page); await expect(avatars()).toHaveCount(2);
+    await bob.context.setOffline(true);
+    await bob.page.getByRole('button', { name: 'Trash', exact: true }).click();
+    await card(bob.page, title).hover();
+    await card(bob.page, title).getByRole('button', { name: 'Delete forever', exact: true }).click();
+    await bob.page.getByRole('alertdialog', { name: 'Delete note forever?', exact: true }).getByRole('button', { name: 'Delete forever', exact: true }).click();
+    await expect(bob.page.getByRole('article')).toHaveCount(0);
+    await expect(avatars()).toHaveCount(2); // Server has not received the removal.
+    await bob.context.setOffline(false); await connected(bob.page);
+    await expect(avatars()).toHaveCount(1);
+    await expect(avatars().first()).toHaveAttribute('aria-label', aliceName);
+    await alice.context.setOffline(true);
+    await bob.page.goto(url); await connected(bob.page);
+    await bob.page.getByRole('button', { name: 'Add to my notes', exact: true }).click();
+    await expect(bob.page).toHaveURL(`${ORIGIN}/`); await connected(bob.page);
+    await alice.context.setOffline(false); await connected(alice.page);
+    await expect(avatars()).toHaveCount(2);
+  } finally { await Promise.all([alice.context.close(), bob.context.close(), guest.context.close()]); }
+});

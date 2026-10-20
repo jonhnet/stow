@@ -26,6 +26,9 @@ export function collectionStore(primary: StowStore, create: (ref: SharedReferenc
   const barrier = { safe: () => allStores().every(s => s.getSnapshot().canReload), save: async () => { await Promise.all(allStores().map(s => s.saveBeforeReload())); } };
   primary.reloadBarrier = barrier;
   const participants = new Map<string, Participant[]>();
+  const memberVersions = new Map<string, number>();
+  const memberRequests = new Map<string, number>();
+  const memberRetries = new Map<string, ReturnType<typeof setTimeout>>();
   const undo = new ScopedUndo(); undo.add(primary.vault, () => primary.getSnapshot().access === 'ready');
   const restored = new Set<StowStore>();
   const listeners = new Set<() => void>();
@@ -40,9 +43,16 @@ export function collectionStore(primary: StowStore, create: (ref: SharedReferenc
     return [...scopes.values()].find(scope => scope.vault.items.has(id) || scope.vault.attachments.has(id)) ?? primary;
   };
   const loadParticipants = async (ref: SharedReference) => {
+    clearTimeout(memberRetries.get(ref.id));
+    const request = (memberRequests.get(ref.id) ?? 0) + 1; memberRequests.set(ref.id, request);
     const response = await fetch('/api/shares/participants', { headers: { 'X-Stow-Share': capability(ref) }, cache: 'no-store', redirect: 'manual' });
-    if (!response.ok) throw new Error('Could not load shared participants.');
-    const result = await response.json(); participants.set(ref.id, result.participants); refresh();
+    if (!response.ok) {
+      if (response.status === 503 && memberRequests.get(ref.id) === request) memberRetries.set(ref.id, setTimeout(() => { void loadParticipants(ref).catch(() => {}); }, 1000));
+      throw new Error('Could not load shared participants.');
+    }
+    const result = await response.json();
+    if (memberRequests.get(ref.id) !== request) return;
+    participants.set(ref.id, result.participants); refresh();
   };
   function refresh() {
     if (refreshing) return; refreshing = true;
@@ -54,6 +64,13 @@ export function collectionStore(primary: StowStore, create: (ref: SharedReferenc
         if (ref && !scopes.has(ref.id)) {
           const scope = create(ref); scope.reloadBarrier = barrier; scopes.set(ref.id, scope); undo.add(scope.vault, () => scope.getSnapshot().access === 'ready' && primary.getSnapshot().notes.some(note => reference(note.id)?.id === ref.id)); scope.subscribe(refresh);
           void loadParticipants(ref).catch(() => {});
+        }
+      }
+      for (const scope of scopes.values()) {
+        const state = scope.getSnapshot(), version = state.membershipVersion ?? 0;
+        if (state.ready && state.access === 'ready' && memberVersions.get(scope.shared!.id) !== version) {
+          memberVersions.set(scope.shared!.id, version);
+          void loadParticipants(scope.shared!).catch(() => {});
         }
       }
       const notes = current.notes.map(note => {

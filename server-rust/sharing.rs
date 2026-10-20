@@ -3,6 +3,7 @@
 use super::*;
 use crate::crdt::{self, clone_doc, diff, field, get, keys, put, root};
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeSet;
 use yrs::{Doc, Map, MapPrelim, ReadTxn, TextPrelim, Transact};
 
 pub const GRACE_MS: f64 = 7.0 * 24.0 * 60.0 * 60.0 * 1000.0;
@@ -13,7 +14,6 @@ pub struct Record {
     // Publication retry identity only; this account has no special permissions.
     pub publisher: String,
     pub sources: Vec<String>,
-    pub participants: BTreeMap<String, Value>,
     pub unreferenced_at: Option<f64>,
     pub collected: bool,
     // Durable publication intent; replayed before serving the publishing vault.
@@ -280,11 +280,16 @@ pub fn reconcile_changes(
     mkdir_durable(&dir)?;
     let path = dir.join(format!("{id}.json"));
     let tx = doc.transact();
+    let previous: BTreeMap<String, Reference> = read_optional(&path)?
+        .map(|bytes| serde_json::from_slice(&bytes))
+        .transpose()?
+        .unwrap_or_default();
+    let before: BTreeSet<_> = previous
+        .values()
+        .map(|r| (r.id.clone(), r.digest.clone()))
+        .collect();
     let mut refs: BTreeMap<String, Reference> = if touched.is_some() {
-        read_optional(&path)?
-            .map(|bytes| serde_json::from_slice(&bytes))
-            .transpose()?
-            .unwrap_or_default()
+        previous
     } else {
         BTreeMap::new()
     };
@@ -310,11 +315,23 @@ pub fn reconcile_changes(
             );
         }
     }
+    let after: BTreeSet<_> = refs
+        .values()
+        .map(|r| (r.id.clone(), r.digest.clone()))
+        .collect();
     atomic_write(&path, &serde_json::to_vec(&refs)?)?;
     let marker = dir.join(format!("{id}.dirty"));
     if marker.exists() {
         std::fs::remove_file(marker)?;
         crate::storage::sync_directory(&dir)?;
+    }
+    if touched.is_none() {
+        // Also invalidates clients after recovery of an index written before a crash.
+        let _ = state.membership_changes.send(None);
+    } else {
+        for (shared, _) in before.symmetric_difference(&after) {
+            let _ = state.membership_changes.send(Some(shared.clone()));
+        }
     }
     Ok(())
 }
@@ -357,6 +374,63 @@ pub(super) fn recover(state: &ServerState, id: &str, account: &mut Account) -> R
     }
     Ok(())
 }
+/// Membership is a projection of the durable retention index, never join history.
+fn members(state: &ServerState, cap: &str) -> Result<Vec<Value>> {
+    let _guard = state
+        .sharing_lock
+        .lock()
+        .map_err(|_| Error::invalid("Sharing unavailable"))?;
+    let record = authorize(state, cap)?;
+    let dir = state.config.data_dir.join("share-references");
+    let mut members = BTreeMap::new();
+    if !dir.exists() {
+        return Ok(vec![]);
+    }
+    for entry in std::fs::read_dir(dir)? {
+        let path = entry?.path();
+        if path.extension().is_some_and(|x| x == "dirty") {
+            return Err(Error::request(
+                503,
+                "Membership is being reconciled. Retry shortly.",
+            ));
+        }
+        if path.extension().is_none_or(|x| x != "json") {
+            continue;
+        }
+        let Some(id) = path
+            .file_stem()
+            .and_then(|v| v.to_str())
+            .filter(|id| policy::is_hash(id))
+        else {
+            continue;
+        };
+        let refs: BTreeMap<String, Reference> = serde_json::from_slice(&std::fs::read(&path)?)?;
+        if !refs
+            .values()
+            .any(|r| r.id == record.id && r.digest == record.digest)
+        {
+            continue;
+        }
+        let metadata = account_metadata::read(&state.account_directory(id))?
+            .ok_or_else(|| Error::invalid("Missing retained account identity"))?;
+        if metadata.vault_id != id
+            || account_reset::resolve(
+                &state.secret,
+                metadata.auth_mode,
+                &metadata.user,
+                &state.incarnations,
+            ) != id
+        {
+            continue;
+        }
+        members.insert(
+            id.to_owned(),
+            json!({"id":id,"name":metadata.user,"guest":false}),
+        );
+    }
+    Ok(members.into_values().collect())
+}
+
 pub fn collect(state: &ServerState) -> Result<()> {
     let _lock = state
         .sharing_lock
@@ -459,7 +533,6 @@ pub async fn api(state: Arc<ServerState>, request: Request<Body>) -> Result<Resp
             return Err(Error::invalid("Choose a note to share"));
         }
         let owner = principal.vault_id.clone();
-        let actor = principal.user.clone();
         let copy = state.clone();
         state
             .with_owned_account(principal, move |account| {
@@ -548,12 +621,6 @@ pub async fn api(state: Arc<ServerState>, request: Request<Body>) -> Result<Resp
                         digest: digest(&token),
                         publisher: owner.clone(),
                         sources,
-                        participants: [(
-                            owner.clone(),
-                            json!({"id":owner,"name":actor,"guest":false}),
-                        )]
-                        .into_iter()
-                        .collect(),
                         unreferenced_at: None,
                         collected: false,
                         publication: Some(STANDARD.encode(update)),
@@ -569,10 +636,11 @@ pub async fn api(state: Arc<ServerState>, request: Request<Body>) -> Result<Resp
         .to_owned();
     let record = authorize(&state, &cap)?;
     if path == "/api/shares/participants" && method == Method::GET {
-        return Ok(json_response(
-            200,
-            json!({"participants":record.participants.values().collect::<Vec<_>>()}),
-        ));
+        let copy = state.clone();
+        let participants = tokio::task::spawn_blocking(move || members(&copy, &cap))
+            .await
+            .map_err(|e| Error::invalid(format!("Membership lookup failed: {e}")))??;
+        return Ok(json_response(200, json!({"participants":participants})));
     }
     if path == "/api/shares/join" && method == Method::POST {
         let principal = state.authenticate_private(&headers).ok();
@@ -614,23 +682,6 @@ pub async fn api(state: Arc<ServerState>, request: Request<Body>) -> Result<Resp
                 true,
             )
         };
-        {
-            let _lock = state
-                .sharing_lock
-                .lock()
-                .map_err(|_| Error::invalid("Sharing unavailable"))?;
-            let mut record = authorize(&state, &cap)?;
-            if record.participants.len() >= 1000 && !record.participants.contains_key(&id) {
-                return Err(Error::request(
-                    429,
-                    "This note has reached its participant limit.",
-                ));
-            }
-            record
-                .participants
-                .insert(id.clone(), json!({"id":id,"name":name,"guest":guest}));
-            write(&state, &record)?;
-        }
         let mut response = json_response(
             200,
             json!({"participant":{"id":id,"name":name,"guest":guest},"canAdd":principal.is_some()}),
