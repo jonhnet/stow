@@ -13,6 +13,15 @@ The account-scoped IndexedDB schema is version 4, with four stores:
 
 A fresh browser cache keeps the notes view loading until the first server snapshot is durable. The account-local completion marker also distinguishes a synchronized empty vault from an unfinished download, so empty accounts remain usable offline. Existing cached notes appear immediately while reconnecting. The marker is written once, after current data commits; it neither changes the CRDT nor appends empty updates on reload.
 
+Startup opens the last verified account's local storage before requesting a
+session. The installed service worker serves its complete cached shell before
+network access. Session verification still precedes every replication connection;
+a different identity hides the old vault, preserves its edits, and requires a
+reload into the new identity. Explicit client-update reloads use a one-navigation
+`stow-update` query flag to fetch a fresh shell rather than repeat the incompatible
+installed build. The entry point removes that flag while preserving navigation
+and Undo state. Ordinary launches never take that network-first update path.
+
 The worker owns the append/sanitize/encode/replace transaction. Another tab's write occurs wholly before or after it. The main thread retains pending buffers until commit and receives only the correction relative to its state vector. Web Locks prevent recovery of an active owner's timestamps or Undo stack. Orphan recovery commits modification timestamps and owner retirement together. Version 1 current-only caches gain an empty `undo` store without changing their existing data; earlier database layouts and replicated-history roots are rejected without rewriting their stored bytes.
 
 Undo survives reload and PWA restart on the same browser profile. Reload prefers that page's previous stack; a fresh launch resumes the most recently edited inactive stack. Active tabs have separate stacks. Loading and compaction retain deleted CRDT content needed by saved stacks, including parent records; permanent deletion prunes affected stack entries and their retained content. Undo metadata stays local to this account and browser, outside backups and sync. Clearing browser storage clears it. `persistent-undo.ts` depends on Yjs 13's stack/delete-set and redo-link representation; its reload/compaction tests must pass when upgrading Yjs.
@@ -24,6 +33,48 @@ Startup and update-log compaction also clean inactive stacks in this browser/acc
 Outgoing updates and tab responses wait for local durability. Otherwise a receiving tab could compact a newly deleted range before its author's Undo metadata becomes visible in the shared database. Storage failure retains pending edits and prevents publishing that incomplete local transaction.
 
 Worker death before a write, during compaction, or after commit leaves unacknowledged input retryable. Page departure waits for durability before releasing the worker and vault; a failed departure retains the in-memory current data and offers an emergency backup. Returning through browser navigation history reloads durable data. Storage protection is requested only through the explicit Settings button. Incremental label invalidation, memoized checklist rows, textarea measurement, cooperative search construction, and account-scoped tab broadcasts remain in place.
+
+## Background diagnostics
+
+Diagnostic events use the separate `stow-background-v1` IndexedDB database, not
+the notes CRDT. It retains the latest 200 events per account and a random browser-
+profile ID. Registration checks, permissions, actual worker wakes, starts,
+skipped overlaps, errors, and successful download durations/byte counts are
+recorded. No note text or images are included.
+
+After account verification, foreground visits/reconnects attempt an upload and
+retry about every five minutes while open, using the existing connection check.
+The five-minute throttle persists across tabs/reloads, including failed attempts.
+Each worker refresh also attempts an upload on completion or failure, regardless
+of that throttle. Uploads independently verify the session, bind `X-Stow-Vault`,
+and have a ten-second network deadline. A Web Lock prevents concurrent uploads
+from this profile/account. Upload failure never blocks displaying cached notes
+or changes a successful note refresh into a failure.
+
+`POST /api/diagnostics/background` sends new events and their increasing local
+sequence numbers. The server deduplicates retries and durably acknowledges the
+sequence watermark before the device advances its cursor. Empty uploads serve
+as heartbeats. If more than 200 events accumulate locally, the oldest are removed;
+`droppedUnacknowledged` counts removals beyond the acknowledged watermark. Some
+may already be on the server if its acknowledgment was lost. Clearing browser
+storage creates a new device identity and loses its unsent records.
+
+The server stores `diagnostics/background-sync/<vaultId>.json` under its data
+directory, separate from each vault. Files survive service restarts and deployments.
+Retention is 30 days by server receipt time, up to 5,000 events per device and
+16 most recently seen devices per account. Pruning happens on read/upload;
+inactive files are not swept by a separate timer. Each device includes its
+browser, last upload's build, last foreground/background upload times, client
+event times, server receipt times, and unacknowledged-drop count.
+
+An authenticated `GET /api/diagnostics/background` with the matching
+`X-Stow-Vault` returns that account's devices and events. Operators can also read
+the JSON files directly to compare devices. Shared-note capabilities cannot read
+or upload these private diagnostics. No log contents are replicated to other
+devices automatically. Recent foreground heartbeats plus no worker wakes help
+distinguish an active device with no observed scheduling from a device that has
+not contacted the server. Neither absence guarantees what Android will do next.
+After deployment, open the updated app once on each device to start collecting.
 
 ## Compatibility epoch 4
 

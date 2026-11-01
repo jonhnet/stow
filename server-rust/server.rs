@@ -326,6 +326,7 @@ pub struct ServerState {
     transfer_budget: Budget,
     failures: Mutex<HashMap<String, Attempt>>,
     reports: Mutex<Vec<Report>>,
+    background_reports: Mutex<()>,
     shutdown: CancellationToken,
     connections: TaskTracker,
     next_client: AtomicU64,
@@ -681,6 +682,7 @@ pub async fn start(config: Config) -> Result<Running> {
         transfer_budget: Budget::default(),
         failures: Mutex::new(HashMap::new()),
         reports: Mutex::new(Vec::new()),
+        background_reports: Mutex::new(()),
         shutdown: CancellationToken::new(),
         connections: TaskTracker::new(),
         next_client: AtomicU64::new(1),
@@ -963,6 +965,51 @@ async fn handle_http(
             403,
             "Storage preferences belong to your private collection.",
         ));
+    }
+    if path == "/api/diagnostics/background" {
+        state.bind(&headers, &principal)?;
+        if principal.vault_id.starts_with("share_") {
+            return Err(Error::request(
+                403,
+                "Background diagnostics belong to your private account.",
+            ));
+        }
+        let upload = if method == Method::POST {
+            Some(crate::background_diagnostics::parse(
+                body_json(request, 1024 * 1024).await?,
+            )?)
+        } else if read {
+            None
+        } else {
+            return Err(Error::request(405, "Method not allowed"));
+        };
+        let status = if upload.is_some() { 201 } else { 200 };
+        let browser = single_header(&headers, "user-agent")
+            .unwrap_or("")
+            .chars()
+            .take(300)
+            .collect();
+        let result = tokio::task::spawn_blocking(move || {
+            let _guard = state
+                .background_reports
+                .lock()
+                .map_err(|_| Error::invalid("Background diagnostics unavailable"))?;
+            let file = state
+                .config
+                .data_dir
+                .join("diagnostics")
+                .join("background-sync")
+                .join(format!("{}.json", principal.vault_id));
+            match upload {
+                Some(upload) => {
+                    crate::background_diagnostics::accept(&file, upload, browser, state.time())
+                }
+                None => crate::background_diagnostics::read(&file, state.time()),
+            }
+        })
+        .await
+        .map_err(|error| Error::invalid(format!("Diagnostic worker failed: {error}")))??;
+        return Ok(json_response(status, result));
     }
     if path == "/api/diagnostics/startup" {
         state.bind(&headers, &principal)?;

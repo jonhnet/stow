@@ -7,7 +7,8 @@ import { writePersistenceBatch } from './persistence-write';
 import { applyStoredUpdates } from './yjs-updates';
 import { SyncTransfer, TransferError, unpackSync } from './sync-transfer';
 import { tabChannelName } from './tab-sync';
-import { openBackgroundDatabase } from './background-state';
+import { openBackgroundDatabase, recordBackgroundEvent } from './background-state';
+import { uploadBackgroundLog } from './background-upload';
 
 /** Download only: pending edits and Undo belong to foreground writers. The same
  * atomic append/compaction used by those writers preserves concurrent changes. */
@@ -27,6 +28,7 @@ export async function refreshBackgroundAccount(account: Account, origin: string,
   signal.throwIfAborted();
   const db = await openPersistenceDatabase(`stow-notes-${account.vaultId}`, () => db.close());
   const doc = new Y.Doc({ gc: false });
+  let receivedBytes = 0;
   try {
     // Never bootstrap an account in the background; it must have opened normally.
     if (await db.get('maintenance', 'initialSyncComplete') !== 1) throw new Error('Open Stow online once before background sync.');
@@ -46,7 +48,9 @@ export async function refreshBackgroundAccount(account: Account, origin: string,
       const channel = new BroadcastChannel(tabChannelName(account.vaultId));
       try { channel.postMessage(result.correction ? Y.mergeUpdates([update, result.correction]) : update); }
       finally { channel.close(); }
+      receivedBytes += update.byteLength;
     });
+    return { receivedBytes };
   } finally { db.close(); doc.destroy(); }
 }
 
@@ -88,22 +92,37 @@ function download(url: string, vector: Uint8Array, signal: AbortSignal, save: (u
 }
 
 /** One bounded attempt per browser opportunity; no timer loop or hidden retries. */
-export async function runBackgroundSync(origin: string) {
-  await navigator.locks.request('stow-background-sync', { ifAvailable: true }, async lock => {
-    if (!lock) return;
-    const db = await openBackgroundDatabase();
-    try {
-      const account = await db.get('account', 'active'); if (!account) return;
+export async function runBackgroundSync(origin: string, build: string | null = null) {
+  const db = await openBackgroundDatabase();
+  try {
+    const account = await db.get('account', 'active'); if (!account) return;
+    const runId = crypto.randomUUID();
+    await recordBackgroundEvent(account, { kind: 'wake', runId });
+    try { await navigator.locks.request('stow-background-sync', { ifAvailable: true }, async lock => {
+      if (!lock) {
+        await recordBackgroundEvent(account, { kind: 'skipped', runId, message: 'Another background refresh is running.' });
+        return;
+      }
       const previous = await db.get('results', account.vaultId);
       const result = { attemptedAt: Date.now(), completedAt: previous?.completedAt };
+      const started = performance.now();
       await db.put('results', result, account.vaultId);
+      await recordBackgroundEvent(account, { kind: 'started', runId });
       try {
-        await refreshBackgroundAccount(account, origin, AbortSignal.timeout(45_000));
+        const { receivedBytes } = await refreshBackgroundAccount(account, origin, AbortSignal.timeout(45_000));
         await db.put('results', { ...result, completedAt: Date.now() }, account.vaultId);
+        await recordBackgroundEvent(account, { kind: 'success', runId, durationMs: performance.now() - started, receivedBytes });
       } catch (error) {
-        await db.put('results', { ...result, error: error instanceof Error ? error.message : String(error) }, account.vaultId);
+        const message = error instanceof Error ? error.message : String(error);
+        await db.put('results', { ...result, error: message }, account.vaultId);
+        await recordBackgroundEvent(account, { kind: 'failure', runId, durationMs: performance.now() - started, message });
         throw error;
       }
-    } finally { db.close(); }
-  });
+    }); } finally {
+      // Upload failures must not change a completed refresh into a sync failure.
+      // Failed authentication keeps the evidence queued for a later signed-in visit.
+      await uploadBackgroundLog(account, origin, 'background', build)
+        .catch(error => console.warn('Background diagnostics remain on this device:', error));
+    }
+  } finally { db.close(); }
 }

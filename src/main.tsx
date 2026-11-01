@@ -6,6 +6,11 @@ import serviceWorkerUrl from './service-worker?worker&url';
 import { startStartupDiagnostics, startupMark } from './core/startup-diagnostics';
 
 startStartupDiagnostics();
+// Keep the one-navigation update instruction out of bookmarks and shared URLs.
+if (new URL(location.href).searchParams.has('stow-update')) {
+  const url = new URL(location.href); url.searchParams.delete('stow-update');
+  history.replaceState(history.state, '', url);
+}
 // Mark intentionally non-authoritative production builds, such as device trials.
 if (import.meta.env.DEV || import.meta.env.VITE_STOW_DEVELOPMENT === 'true') {
   document.documentElement.classList.add('development');

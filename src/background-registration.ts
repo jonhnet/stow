@@ -1,21 +1,34 @@
 import type { Account } from './core/account';
-import { BACKGROUND_INTERVAL, BACKGROUND_TAG, rememberBackgroundAccount } from './core/background-state';
+import { BACKGROUND_INTERVAL, BACKGROUND_TAG, rememberBackgroundAccount, recordBackgroundEvent, type BackgroundAvailability } from './core/background-state';
 
 interface PeriodicRegistration extends ServiceWorkerRegistration {
   periodicSync?: { getTags(): Promise<string[]>; register(tag: string, options: { minInterval: number }): Promise<void> };
 }
-export type BackgroundAvailability = 'enabled' | 'unavailable' | 'not-permitted' | 'error';
+export type { BackgroundAvailability } from './core/background-state';
 
 /** An optional browser capability, never a substitute for foreground sync. */
 export async function registerBackgroundSync(account: Account): Promise<BackgroundAvailability> {
-  if (!import.meta.env.PROD) return 'unavailable';
-  const registration = await navigator.serviceWorker.ready as PeriodicRegistration;
-  if (!registration.periodicSync) return 'unavailable';
-  const permission = await navigator.permissions.query({ name: 'periodic-background-sync' as PermissionName });
-  if (permission.state !== 'granted') return 'not-permitted';
+  // Select the account even when registration is denied: a prior registration
+  // may still wake, and must never target a previously signed-in account.
   await rememberBackgroundAccount(account);
-  if (!(await registration.periodicSync.getTags()).includes(BACKGROUND_TAG)) {
-    await registration.periodicSync.register(BACKGROUND_TAG, { minInterval: BACKGROUND_INTERVAL });
+  const standalone = matchMedia('(display-mode: standalone)').matches;
+  await recordBackgroundEvent(account, { kind: 'registration-check', standalone });
+  const record = async (availability: BackgroundAvailability, permission?: PermissionState, message?: string) => {
+    await recordBackgroundEvent(account, { kind: 'registration', availability, standalone, permission, message });
+    return availability;
+  };
+  try {
+    if (!import.meta.env.PROD) return await record('unavailable');
+    const registration = await navigator.serviceWorker.ready as PeriodicRegistration;
+    if (!registration.periodicSync) return await record('unavailable');
+    const permission = await navigator.permissions.query({ name: 'periodic-background-sync' as PermissionName });
+    if (permission.state !== 'granted') return await record('not-permitted', permission.state);
+    if (!(await registration.periodicSync.getTags()).includes(BACKGROUND_TAG)) {
+      await registration.periodicSync.register(BACKGROUND_TAG, { minInterval: BACKGROUND_INTERVAL });
+    }
+    return await record('enabled', permission.state);
+  } catch (error) {
+    await record('error', undefined, error instanceof Error ? error.message : String(error));
+    throw error;
   }
-  return 'enabled';
 }

@@ -5,6 +5,12 @@ It features a draggable overview, markdown text body, checklists, images, links,
 It synchronizes between your browsers and phone and supports offline
 editing. It can be installed as an app (PWA) on Android.
 
+After the first online visit, launches use the installed application shell and
+the last verified account's local notes immediately. Checking sign-in and syncing
+run afterward; a slow network does not hold the cache behind a spinner. A newly
+verified different account stops sync and asks for a reload, keeping pending
+edits in their original account. A fresh device still needs its initial download.
+
 Installed apps can refresh notes while closed when the browser grants Periodic
 Background Sync permission. Stow requests opportunities at least an hour apart;
 the browser chooses the actual timing and may not run them. Settings shows
@@ -14,6 +20,20 @@ downloads note content and metadata, preserves pending local edits and Undo, and
 requires a still-valid sign-in. Image fetching and uploading local edits happen
 when Stow is open. Before relying on a newly edited note offline, open Stow on that
 device while connected and check that the note has arrived.
+
+Settings → **Download background log** exports this device's most recent 200
+events for the current account: permission/registration checks, browser wake-ups,
+starts, skipped overlaps, failures, and successful downloads (duration and bytes).
+Wake/start records are durable before the work begins, so an interrupted attempt
+remains visible. Logs upload automatically on opening/reconnecting, roughly every
+five minutes while Stow is open, and after background refresh attempts. Uploads
+include a persistent browser-profile identifier, browser, and build, but no note
+text or images. Offline records wait locally for a verified connection. The server
+retains up to 30 days, 5,000 events per device, and 16 devices per account; see
+[diagnostic storage and retrieval](docs/storage-protocol.md#background-diagnostics).
+Foreground sync does not replace the worker's results. A registered app with no recorded
+wakes has not observed a scheduling opportunity since logging began; this does
+not predict whether the browser will schedule it later.
 
 The [Android background-sync tests](tests/android/README.md) distinguish forced
 worker execution from observation of the browser's real scheduling.

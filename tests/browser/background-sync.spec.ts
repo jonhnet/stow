@@ -1,4 +1,5 @@
 import { test, expect, type BrowserContext } from '@playwright/test';
+import { readFile } from 'node:fs/promises';
 
 const origin = 'http://localhost:4173';
 async function result(context: BrowserContext, vaultId: string) {
@@ -48,6 +49,12 @@ test('periodic sync fetches a remote note with every Stow window closed, then op
     await cdp.send('ServiceWorker.stopAllWorkers');
     await cdp.send('ServiceWorker.dispatchPeriodicSyncEvent', { origin, registrationId: id, tag: 'stow-notes' });
     await expect.poll(async () => (await result(context, account.vaultId))?.completedAt).toBeTruthy();
+    // The worker uploads its evidence while all Stow documents remain closed.
+    await expect.poll(async () => {
+      const response = await context.request.get(`${origin}/api/diagnostics/background`, { headers: { 'X-Stow-Vault': account.vaultId } });
+      const reports = await response.json();
+      return reports.devices.some((device: any) => device.lastBackgroundAt && device.events.some((event: any) => event.kind === 'success'));
+    }).toBe(true);
     expect(context.pages().map(page => page.url())).toEqual(['about:blank']);
     await context.setOffline(true);
     const offline = await context.newPage(); await offline.goto(origin);
@@ -55,7 +62,69 @@ test('periodic sync fetches a remote note with every Stow window closed, then op
     await expect(offline.locator('.sync-state')).toHaveAttribute('title', 'Offline — notes stored on this device');
     await offline.getByRole('button', { name: 'Settings', exact: true }).click();
     await expect(offline.getByText(/Last synced on this device:/)).toBeVisible();
+    const downloaded = offline.waitForEvent('download');
+    await offline.getByRole('button', { name: 'Download background log', exact: true }).click();
+    const text = await readFile((await (await downloaded).path())!, 'utf8');
+    const log = JSON.parse(text);
+    expect(log.events.some((event: any) => event.kind === 'registration' && event.availability === 'enabled')).toBe(true);
+    const wake = log.events.filter((event: any) => ['wake', 'started', 'success'].includes(event.kind));
+    expect(wake.map((event: any) => event.kind)).toEqual(['wake', 'started', 'success']);
+    expect(new Set(wake.map((event: any) => event.runId)).size).toBe(1);
+    expect(wake[2].receivedBytes).toBeGreaterThan(0);
+    expect(log.vaultId).toBe(account.vaultId);
+    expect(log.deviceId).toBeTruthy();
+    expect(text).not.toContain('Background flight plan');
   } finally { await context.close(); await writer.close(); }
+});
+
+test('devices automatically upload, retry a lost acknowledgment without duplicates, and send periodic heartbeats', async ({ browser }, info) => {
+  const host = 'http://localhost:4174';
+  const a = await browser.newContext(), b = await browser.newContext();
+  try {
+    for (const context of [a, b]) await context.addCookies([{ name: 'stow_test_user', value: `log-upload-${info.testId}`, url: host }]);
+    const page = await a.newPage();
+    await page.clock.install();
+    let loseResponse = true;
+    await page.route('**/api/diagnostics/background', async route => {
+      if (route.request().method() === 'POST' && loseResponse) {
+        await route.fetch(); // Committed by the server, but not acknowledged locally.
+        await route.abort('failed');
+      } else await route.continue();
+    });
+    await page.goto(host);
+    await expect(page.locator('.sync-state')).toHaveAttribute('title', 'Connected');
+    const account = await page.evaluate(() => JSON.parse(localStorage.getItem('stow-account-v1')!));
+    const reports = async () => (await (await a.request.get(`${host}/api/diagnostics/background`, { headers: { 'X-Stow-Vault': account.vaultId } })).json()).devices;
+    await expect.poll(async () => (await reports()).length).toBe(1);
+    const first = (await reports())[0];
+    expect(first.events.some((event: any) => event.kind === 'registration')).toBe(true);
+    const second = await b.newPage(); await second.goto(host);
+    await expect.poll(async () => (await reports()).length).toBe(2);
+    expect(new Set((await reports()).map((device: any) => device.deviceId)).size).toBe(2);
+    loseResponse = false;
+    const retry = page.waitForResponse(response => response.url().endsWith('/api/diagnostics/background') && response.request().method() === 'POST');
+    await page.clock.fastForward(5 * 60 * 1000 + 1000);
+    expect((await retry).status()).toBe(201);
+    const after = (await reports()).find((device: any) => device.deviceId === first.deviceId);
+    expect(after.events).toEqual(first.events);
+    // A response arriving is earlier than its durable local acknowledgment.
+    await expect.poll(() => page.evaluate(async vaultId => {
+      const db = await new Promise<IDBDatabase>((resolve, reject) => {
+        const request = indexedDB.open('stow-background-v1'); request.onsuccess = () => resolve(request.result); request.onerror = () => reject(request.error);
+      });
+      try { return await new Promise<number>((resolve, reject) => {
+        const request = db.transaction('metadata').objectStore('metadata').get(`uploaded:${vaultId}`);
+        request.onsuccess = () => resolve(Number(request.result)); request.onerror = () => reject(request.error);
+      }); } finally { db.close(); }
+    }, account.vaultId)).toBe(first.through);
+    const heartbeat = page.waitForResponse(response => response.url().endsWith('/api/diagnostics/background') && response.request().method() === 'POST');
+    await page.clock.fastForward(5 * 60 * 1000 + 1000);
+    const response = await heartbeat;
+    expect(response.status()).toBe(201);
+    expect(response.request().postDataJSON().events).toEqual([]);
+    expect(response.request().postDataJSON().source).toBe('foreground');
+    expect(after.browser).toBeTruthy();
+  } finally { await a.close(); await b.close(); }
 });
 
 test('settings distinguishes background registration from attempts, failures, and success', async ({ browser }, info) => {
@@ -86,5 +155,11 @@ test('settings distinguishes background registration from attempts, failures, an
     await expect(page.getByText(/^Last background attempt:/)).toBeVisible();
     await expect(page.getByText(/^Last background success:/)).toBeVisible();
     await expect(page.getByText('Last background error: Background session rejected (HTTP 401)', { exact: true })).toBeVisible();
+    const downloaded = page.waitForEvent('download');
+    await page.getByRole('button', { name: 'Download background log', exact: true }).click();
+    const log = JSON.parse(await readFile((await (await downloaded).path())!, 'utf8'));
+    expect(log.events.some((event: any) => event.kind === 'registration')).toBe(true);
+    expect(log.result.error).toContain('HTTP 401');
+    expect(log.events.some((event: any) => event.kind === 'wake')).toBe(false);
   } finally { await context.close(); }
 });

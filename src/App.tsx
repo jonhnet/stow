@@ -305,11 +305,11 @@ function BackgroundRefreshDetails() {
   }, []);
   if (error) return <small className="last-sync">Could not read background refresh diagnostics.</small>;
   if (result === undefined) return null;
-  if (result === null) return <small className="last-sync">Background refresh: no attempts recorded on this device.</small>;
-  return <><small className="last-sync">Last background attempt: {new Date(result.attemptedAt).toLocaleString()}</small>
+  return <>{result === null ? <small className="last-sync">Background refresh: no attempts recorded on this device.</small> : <><small className="last-sync">Last background attempt: {new Date(result.attemptedAt).toLocaleString()}</small>
     <small className="last-sync">Last background success: {result.completedAt ? new Date(result.completedAt).toLocaleString() : 'none recorded'}</small>
     {result.error ? <small className="last-sync">Last background error: {result.error}</small>
-      : result.completedAt === undefined || result.completedAt < result.attemptedAt ? <small className="last-sync">Last attempt has no recorded completion; it may still be running or have been interrupted.</small> : null}</>;
+      : result.completedAt === undefined || result.completedAt < result.attemptedAt ? <small className="last-sync">Last attempt has no recorded completion; it may still be running or have been interrupted.</small> : null}</>}
+    <button type="button" onClick={() => { void store.exportBackgroundLog().catch(() => setError(true)); }}><Download size={16} />Download background log</button></>;
 }
 
 function SignInButton() {

@@ -25,7 +25,7 @@ test('invalid browser resource timings do not discard the startup report', async
   await expect(page.locator('.sync-state')).toHaveClass(/sync-online/);
 });
 
-test('a reload reports the real session delay and local startup checkpoints', async ({ page }) => {
+test('a reload reports cached notes appearing before the delayed session response', async ({ page }) => {
   await page.goto('/?startup-profile=1');
   await expect(page.locator('.app')).toBeVisible();
   await expect(page.locator('.sync-state')).toHaveClass(/sync-online/);
@@ -50,10 +50,11 @@ test('a reload reports the real session delay and local startup checkpoints', as
   expect(report).toBeTruthy();
   expect(report.reason).toBe('ready');
   const marks = Object.fromEntries(report.marks.map((entry: { name: string; at: number }) => [entry.name, entry.at]));
-  expect(marks['spinner-dom']).toBeGreaterThan(0);
+  expect(marks['notes-frame']).toBeGreaterThan(0);
   expect(marks['session-response'] - marks['session-start']).toBeGreaterThanOrEqual(450);
   expect(marks['account-verified']).toBeGreaterThanOrEqual(marks['session-response']);
-  expect(marks['idb-open-start']).toBeGreaterThanOrEqual(marks['account-verified']);
+  expect(marks['idb-open-start']).toBeLessThan(marks['session-start']);
+  expect(marks['notes-frame']).toBeLessThan(marks['session-response']);
   expect(marks['idb-read-end']).toBeGreaterThanOrEqual(marks['idb-open-start']);
   expect(marks['notes-frame']).toBeGreaterThanOrEqual(marks['account-opened']);
   expect(report.counters.updateCount).toBeGreaterThanOrEqual(0);

@@ -33,23 +33,28 @@ function network(online) {
   // survive it. Block only this test port inside the isolated rooted emulator.
   for (const command of ['iptables', 'ip6tables']) {
     const rule = ['OUTPUT', '-p', 'tcp', '--dport', String(port), '-m', 'comment', '--comment', 'stow-offline-test', '-j', 'REJECT', '--reject-with', 'tcp-reset'];
-    if (!online) adb('shell', command, '-I', ...rule);
+    // Android's connectivity service also updates firewall rules when radios
+    // change. Wait for its lock rather than racing that normal system activity.
+    if (!online) adb('shell', command, '-w', '5', '-I', ...rule);
     else {
-      const exists = execFileSync('adb', ['-s', values.serial, 'shell', `${command} -C ${rule.join(' ')} >/dev/null 2>&1; echo $?`], { encoding: 'utf8' }).trim() === '0';
-      if (exists) adb('shell', command, '-D', ...rule);
+      const status = execFileSync('adb', ['-s', values.serial, 'shell', `${command} -w 5 -C ${rule.join(' ')} >/dev/null 2>&1; echo $?`], { encoding: 'utf8' }).trim();
+      if (status !== '0' && status !== '1') throw new Error(`${command} could not inspect the emulator test rule (exit ${status}).`);
+      if (status === '0') adb('shell', command, '-w', '5', '-D', ...rule);
     }
   }
   record(online ? 'network-enabled' : 'network-disabled');
 }
-async function readResult(page, vaultId) {
+async function readDiagnostics(page, vaultId) {
   return page.evaluate(async vaultId => {
     const db = await new Promise((resolve, reject) => {
       const r = indexedDB.open('stow-background-v1'); r.onsuccess = () => resolve(r.result); r.onerror = () => reject(r.error);
     });
-    try { return await new Promise((resolve, reject) => {
-      const r = db.transaction('results').objectStore('results').get(vaultId);
-      r.onsuccess = () => resolve(r.result); r.onerror = () => reject(r.error);
-    }); } finally { db.close(); }
+    try {
+      const tx = db.transaction(['results', 'events', 'metadata']);
+      const read = request => new Promise((resolve, reject) => { request.onsuccess = () => resolve(request.result); request.onerror = () => reject(request.error); });
+      const [result, events, deviceId] = await Promise.all([read(tx.objectStore('results').get(vaultId)), read(tx.objectStore('events').index('vaultId').getAll(vaultId)), read(tx.objectStore('metadata').get('deviceId'))]);
+      return { result, events, deviceId };
+    } finally { db.close(); }
   }, vaultId);
 }
 
@@ -76,11 +81,16 @@ try {
   record('browser', { version: android.version(), permission });
   if (permission !== 'granted') throw new Error('Install Stow, launch it from its home-screen icon, and interact with it before observing natural scheduling.');
   await expect.poll(() => page.evaluate(async () => (await navigator.serviceWorker.ready).periodicSync.getTags())).toContain(tag);
-  const before = await readResult(page, account.vaultId);
+  const before = await readDiagnostics(page, account.vaultId);
   for (const client of context.pages()) if (client.url().startsWith(origin)) await client.close();
   record('all-stow-windows-closed');
   const remote = await writer.newPage(); await remote.goto(origin);
   await expect(remote.locator('.sync-state')).toHaveAttribute('title', 'Connected');
+  const uploadedLog = async () => {
+    const response = await remote.request.get(`${origin}/api/diagnostics/background`, { headers: { 'X-Stow-Vault': account.vaultId } });
+    expect(response.ok()).toBe(true);
+    return (await response.json()).devices.find(device => device.deviceId === before.deviceId);
+  };
   const title = `Android flight plan ${Date.now()}`;
   await remote.getByRole('button', { name: 'Take a note…', exact: true }).click();
   await remote.getByRole('textbox', { name: 'Note title', exact: true }).fill(title);
@@ -111,16 +121,25 @@ try {
     record('periodic-event-dispatched');
     await expect.poll(async () => {
       const worker = context.serviceWorkers().find(w => w.url() === `${origin}/sw.js`);
-      return worker && (await readResult(worker, account.vaultId))?.completedAt;
+      return worker && (await readDiagnostics(worker, account.vaultId)).result?.completedAt;
     }).toBeGreaterThanOrEqual(started);
+    await expect.poll(async () => (await uploadedLog())?.events.some(event => event.at >= started && event.kind === 'success')).toBe(true);
     network(false);
   }
+  record('server-log', { device: await uploadedLog() });
   const offline = await android.contexts()[0].newPage(); await offline.goto(origin);
   await expect(offline.locator('.sync-state')).toHaveAttribute('title', 'Offline — notes stored on this device');
   expect(await offline.evaluate(() => fetch('/api/session').then(() => true, () => false))).toBe(false);
-  const outcome = await readResult(offline, account.vaultId);
+  const diagnostics = await readDiagnostics(offline, account.vaultId);
+  const outcome = diagnostics.result;
   const refreshed = (outcome?.completedAt ?? 0) >= started;
-  record('offline-result', { before, outcome, refreshed });
+  record('offline-result', { before, outcome, refreshed, backgroundLog: diagnostics.events });
+  if (!observeSeconds) {
+    const events = diagnostics.events.filter(event => event.at >= started && ['wake', 'started', 'success'].includes(event.kind));
+    expect(events.map(event => event.kind)).toEqual(['wake', 'started', 'success']);
+    expect(new Set(events.map(event => event.runId)).size).toBe(1);
+    expect(events[2].receivedBytes).toBeGreaterThan(0);
+  }
   if (!observeSeconds || refreshed) await expect(offline.getByRole('article', { name: `Open note: ${title}`, exact: true })).toContainText('Background arrival before departure');
   else record('no-natural-wake-observed', { seconds: observeSeconds });
   record('passed');

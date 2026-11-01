@@ -28,7 +28,8 @@ The forced-event regression grants periodic-sync eligibility through DevTools,
 registers the real production worker, closes every Stow window, creates a note on
 a second client, stops the worker, and dispatches a `periodicsync` event. A blank
 Chrome control tab stays foreground so Android does not suspend DevTools dispatch;
-no Stow document is open. This proves worker behavior, not an Android wake. It then
+no Stow document is open. It also checks that the worker's wake/start/success log
+reaches the server without reopening Stow. This proves worker behavior, not an Android wake. It then
 disables Wi-Fi and mobile data, removes the ADB reverse tunnel and blocks the test
 port (including existing connections). It verifies that the server is unreachable
 and that the downloaded note opens offline. Cleanup restores connectivity.
@@ -50,6 +51,17 @@ Android jobs. A result with no wake is an observation, not a pass proving period
 delivery. The log explicitly distinguishes the modes and records actual attempt
 and completion times. A standalone shortcut can be insufficient: Chromium on
 Android checks for an installed WebAPK or TWA before granting permission.
+
+On a normally installed app, Settings → **Download background log** provides
+the persistent event history without ADB or DevTools. Registration records
+include permission and standalone status; `wake` records are emitted only when
+the browser dispatches the worker's periodic event. A `started` event with no
+success/failure can mean the worker was terminated. A denied registration or an
+authentication failure is distinct from no browser wake. Exports retain the most
+recent 200 events for this account on this device, including while offline.
+Logs also upload automatically when connected, including after worker attempts.
+The server keeps a bounded history across devices; see
+[storage and retrieval](../../docs/storage-protocol.md#background-diagnostics).
 
 The normal CI browser suite also runs a closed-window/offline regression with
 desktop Chromium. The Android harness is opt-in because it requires a provisioned

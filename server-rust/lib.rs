@@ -2,6 +2,7 @@
 
 pub mod account_metadata;
 pub mod account_reset;
+pub mod background_diagnostics;
 pub mod cache;
 pub mod crdt;
 pub mod diagnostics;

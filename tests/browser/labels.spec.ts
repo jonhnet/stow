@@ -140,7 +140,10 @@ test('a label color is shared across notes and survives reload while note backgr
 
   const originalCookies = await context.cookies(ORIGIN);
   await context.addCookies([{ name: 'stow_test_user', value: 'labels-color-isolation@example.test', url: ORIGIN }]);
-  await ready(page);
+  await page.goto(ORIGIN);
+  await expect(page.getByText(/signed-in account changed/)).toBeVisible();
+  await page.getByRole('button', { name: 'Reload Stow', exact: true }).click();
+  await expect(page.locator('.sync-state')).toHaveAttribute('title', 'Connected');
   await expect(page.getByRole('article')).toHaveCount(0);
   await page.getByRole('button', { name: 'Labels', exact: true }).click();
   await expect(page.getByRole('group', { name: 'Labels', exact: true }).getByRole('button')).toHaveCount(0);
@@ -150,7 +153,10 @@ test('a label color is shared across notes and survives reload while note backgr
   await otherColors.getByRole('button', { name: 'Coral', exact: true }).click();
   await expect(chip(card(page, 'Other account travel note'), 'Travel')).toHaveCSS('background-color', 'rgb(250, 175, 168)');
   await context.addCookies(originalCookies);
-  await ready(page);
+  await page.goto(ORIGIN);
+  await expect(page.getByText(/signed-in account changed/)).toBeVisible();
+  await page.getByRole('button', { name: 'Reload Stow', exact: true }).click();
+  await expect(page.locator('.sync-state')).toHaveAttribute('title', 'Connected');
   await expect(card(page, 'Other account travel note')).toHaveCount(0);
   await expect(chip(card(page, 'Colored travel note'), 'Travel')).toHaveCSS('background-color', 'rgb(226, 246, 211)');
   await expect(chip(card(page, 'Plain travel note'), 'Travel')).toHaveCSS('background-color', 'rgb(226, 246, 211)');

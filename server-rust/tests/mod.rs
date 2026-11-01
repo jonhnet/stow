@@ -9,6 +9,7 @@ use yrs::{Doc, Map, MapPrelim, MapRef, Out, ReadTxn, Text, TextPrelim, Transact}
 mod account_metadata;
 mod account_metadata_api;
 mod api;
+mod background_diagnostics;
 mod deletion;
 mod history;
 mod identity;

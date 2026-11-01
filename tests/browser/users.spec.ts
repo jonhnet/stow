@@ -69,7 +69,8 @@ async function watchDatabaseOpens(context: BrowserContext) {
 }
 
 async function expectOnlyCurrentDatabases(page: Page, vaultId: string) {
-  await expect.poll(() => page.evaluate(() => [...new Set<string>(Reflect.get(window, 'stowOpenedDatabases'))].sort()))
+  // Registration diagnostics use one separate database with account-indexed logs.
+  await expect.poll(() => page.evaluate(() => [...new Set<string>(Reflect.get(window, 'stowOpenedDatabases'))].filter(name => name !== 'stow-background-v1').sort()))
     .toEqual([`stow-images-${vaultId}`, `stow-notes-${vaultId}`]);
 }
 
@@ -118,6 +119,8 @@ test('an account change preserves offline edits and never uploads them to the ne
     await note(page, 'B after switch', 'This is B.');
     await setUser(context, 'switch-a@example.test');
     await page.reload();
+    await expect(page.getByText(/signed-in account changed/)).toBeVisible();
+    await page.getByRole('button', { name: 'Reload Stow', exact: true }).click();
     await expect(card(page, 'Pending A edit')).toBeVisible();
     await expect(card(page, 'B after switch')).toHaveCount(0);
     const remote = await userContext(browser, 'switch-a@example.test');
@@ -138,7 +141,10 @@ test('a new account in another tab closes the previous account and its editor', 
     await card(old, 'Hidden on switch').click();
     await setUser(context, 'tabs-b@example.test');
     const next = await context.newPage();
-    await ready(next);
+    await next.goto(ORIGIN);
+    await expect(next.getByText(/signed-in account changed/)).toBeVisible();
+    await next.getByRole('button', { name: 'Reload Stow', exact: true }).click();
+    await expect(next.locator('.sync-state')).toHaveAttribute('title', 'Connected');
     await expect(old.getByText(/account.*changed/i).first()).toBeVisible();
     await expect(old.getByRole('dialog')).toHaveCount(0);
     await expect(card(old, 'Hidden on switch')).toHaveCount(0);
@@ -284,7 +290,10 @@ for (const denial of ['missing identity', 'login redirect', 'malformed session']
     await expect(page.getByRole('button', { name: 'Take a note…', exact: true })).toHaveCount(0);
     await expect(card(page, 'Cached but locked')).toHaveCount(0);
     await expect(page.getByText(/proxy|authentication|sign in/i).first()).toBeVisible();
-    expect(await page.evaluate(() => Reflect.get(window, 'stowOpenedDatabases'))).toEqual([]);
+    // Cache-first startup may already have opened the previous verified account.
+    // A malformed response must hide it and must never select another vault.
+    const opened = await page.evaluate(() => Reflect.get(window, 'stowOpenedDatabases') as string[]);
+    expect(new Set(opened.filter(name => name.startsWith('stow-notes-'))).size).toBe(1);
     expect(await page.evaluate(async () => (await indexedDB.databases()).some(db => db.name?.startsWith('stow-notes-')))).toBe(true);
   } finally { await context.close(); }
 });
@@ -317,6 +326,8 @@ for (const resumeAs of ['same', 'different']) test(`expired sign-in keeps offlin
       await page.reload(); await expect(page.locator('.sync-state')).toHaveAttribute('title', 'Connected');
       await expect(card(page, 'Saved while signed out')).toHaveCount(0);
       await setUser(context, user); await page.reload();
+      await expect(page.getByText(/signed-in account changed/)).toBeVisible();
+      await page.getByRole('button', { name: 'Reload Stow', exact: true }).click();
       await expect(card(page, 'Saved while signed out')).toBeVisible();
       await expect(page.locator('.sync-state')).toHaveAttribute('title', 'Connected');
     }

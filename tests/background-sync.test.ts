@@ -3,7 +3,8 @@ import { IDBFactory } from 'fake-indexeddb';
 import { beforeEach, test } from 'node:test';
 import assert from 'node:assert/strict';
 import * as Y from 'yjs';
-import { refreshBackgroundAccount } from '../src/core/background-sync';
+import { refreshBackgroundAccount, runBackgroundSync } from '../src/core/background-sync';
+import { recordBackgroundEvent, readBackgroundLog, rememberBackgroundAccount, BACKGROUND_LOG_LIMIT } from '../src/core/background-state';
 import { openPersistenceDatabase } from '../src/core/persistence-database';
 import { writePersistenceBatch } from '../src/core/persistence-write';
 import { SyncTransfer, packSync } from '../src/core/sync-transfer';
@@ -106,4 +107,57 @@ test('background diagnostics report attempts independently of foreground sync an
   assert.deepEqual(await readBackgroundResult(account), result);
   assert.equal(await readBackgroundResult({ ...account, vaultId: 'another-account-12345' }), null);
   await assert.rejects(readBackgroundResult({ ...account, principalId: 'shared-participant-123' }), /document scope/);
+});
+
+test('the background log is bounded per account, survives reopening, and records unfinished attempts', async () => {
+  const other = { ...account, vaultId: 'another-background-account' };
+  await recordBackgroundEvent(other, { kind: 'wake', runId: 'other-run' });
+  for (let i = 0; i < BACKGROUND_LOG_LIMIT + 3; i++) {
+    await recordBackgroundEvent(account, { kind: 'wake', runId: String(i) });
+  }
+  await recordBackgroundEvent(account, { kind: 'started', runId: 'interrupted' });
+  const log = await readBackgroundLog(account);
+  assert.equal(log.events.length, BACKGROUND_LOG_LIMIT);
+  assert.equal(log.events[0].kind, 'wake');
+  assert.equal(log.events.at(-1)?.kind, 'started');
+  assert.equal(log.result, null);
+  assert.equal((await readBackgroundLog(other)).events.length, 1);
+  assert.equal((await readBackgroundLog(other)).deviceId, log.deviceId);
+  assert.ok(log.deviceId);
+  assert.deepEqual(await readBackgroundLog(account), log);
+});
+
+for (const busy of [false, true]) test(`a real wake records ${busy ? 'a skipped overlap' : 'an authentication failure'} without touching notes`, async t => {
+  t.mock.method(console, 'warn', () => {});
+  let now = Date.now();
+  t.mock.method(Date, 'now', () => now);
+  await rememberBackgroundAccount(account);
+  const original = Object.getOwnPropertyDescriptor(navigator, 'locks');
+  Object.defineProperty(navigator, 'locks', { configurable: true, value: { request: async (_name: string, _options: unknown, run: (lock: unknown) => Promise<void>) => run(busy ? null : {}) } });
+  t.after(() => { if (original) Object.defineProperty(navigator, 'locks', original); else Reflect.deleteProperty(navigator, 'locks'); });
+  // A wall-clock correction during refresh must not create a negative duration
+  // that the diagnostic server would reject, blocking all subsequent log batches.
+  const fetch = t.mock.method(globalThis, 'fetch', async () => { now -= 1000; return new Response('', { status: 401 }); });
+  if (busy) await runBackgroundSync('http://localhost');
+  else await assert.rejects(runBackgroundSync('http://localhost'), /HTTP 401/);
+  const { events, result } = await readBackgroundLog(account);
+  assert.deepEqual(events.map(event => event.kind), busy ? ['wake', 'skipped'] : ['wake', 'started', 'failure']);
+  assert.equal(new Set(events.map(event => 'runId' in event ? event.runId : null)).size, 1);
+  assert.equal(fetch.mock.callCount(), busy ? 0 : 2); // The uploader independently verifies identity.
+  if (!busy) assert.match(result!.error!, /HTTP 401/);
+  const failure = events.find(event => event.kind === 'failure');
+  if (!busy) assert.ok(failure && failure.durationMs >= 0);
+  assert.ok((await indexedDB.databases()).every(db => db.name === 'stow-background-v1'));
+});
+
+test('adding the event log keeps an existing background registration and last successful result', async () => {
+  const { openDB } = await import('idb');
+  const old = await openDB('stow-background-v1', 1, { upgrade(db) { db.createObjectStore('account'); db.createObjectStore('results'); } });
+  await old.put('account', account, 'active');
+  await old.put('results', { attemptedAt: 100, completedAt: 200 }, account.vaultId);
+  old.close();
+  await recordBackgroundEvent(account, { kind: 'registration', availability: 'enabled', standalone: true, permission: 'granted' });
+  const log = await readBackgroundLog(account);
+  assert.deepEqual(log.result, { attemptedAt: 100, completedAt: 200 });
+  assert.equal(log.events.length, 1);
 });

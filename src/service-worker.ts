@@ -1,5 +1,6 @@
 import { BACKGROUND_TAG } from './core/background-state';
 import { runBackgroundSync } from './core/background-sync';
+import { BUILD_INFO } from './build-info';
 
 // Vite fills these after emitting the complete application bundle.
 declare const __STOW_ASSETS__: string[];
@@ -22,9 +23,16 @@ scope.addEventListener('activate', event => event.waitUntil(caches.keys().then(k
 scope.addEventListener('fetch', event => {
   const url = new URL(event.request.url);
   if (event.request.method !== 'GET' || url.origin !== scope.location.origin || url.pathname.startsWith('/api/') || url.pathname === '/sync') return;
-  if (event.request.mode === 'navigate') event.respondWith(fetch(event.request).catch(() => caches.match('/index.html')));
+  // The installed shell and its hashed assets are one complete offline build.
+  // Never put a network request ahead of an ordinary launch, even when the
+  // browser says it is online. Explicit client updates fetch a fresh shell.
+  // Leave proxy sign-in/callback pages and other server routes to the network.
+  if (event.request.mode === 'navigate' && ['/', '/index.html', '/share'].includes(url.pathname)) event.respondWith(caches.open(CACHE).then(async cache => {
+    if (url.searchParams.has('stow-update')) return fetch(event.request).catch(() => cache.match('/index.html'));
+    return await cache.match('/index.html') ?? fetch(event.request);
+  }));
   else if (ASSETS.includes(url.pathname)) event.respondWith(caches.match(event.request).then(cached => cached || fetch(event.request)));
 });
 scope.addEventListener('periodicsync', event => {
-  if (event.tag === BACKGROUND_TAG) event.waitUntil(runBackgroundSync(scope.location.origin));
+  if (event.tag === BACKGROUND_TAG) event.waitUntil(runBackgroundSync(scope.location.origin, BUILD_INFO.commit));
 });
