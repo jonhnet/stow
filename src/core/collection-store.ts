@@ -35,7 +35,27 @@ export function collectionStore(primary: StowStore, create: (ref: SharedReferenc
   let snapshot: Snapshot, refreshing = false;
   const versions = new Map<string, StowStore>();
   const views = new Map<string, { reference: Note; content: Note; participants?: Participant[]; view: Note }>();
-  const reference = (id: string) => sharedPage ? (id === primary.shared?.id ? primary.shared : undefined) : sharedReference(primary.vault.notes.get(id)?.get('share'));
+  // Save/sync notifications run several times per keystroke. Resolve sharing
+  // from an index, rather than rereading every note's CRDT maps each time.
+  const references = new Map<string, SharedReference>();
+  const readReference = (id: string) => {
+    const ref = sharedReference(primary.vault.notes.get(id)?.get('share'));
+    if (ref) references.set(id, ref); else references.delete(id);
+  };
+  if (!sharedPage) {
+    for (const id of primary.vault.notes.keys()) readReference(id);
+    primary.vault.notes.observeDeep(events => {
+      const changed = new Set<string>();
+      for (const event of events) {
+        if (!(event instanceof Y.YMapEvent)) continue;
+        if (event.target === primary.vault.notes) for (const id of event.keysChanged) changed.add(id);
+        else if (event.path.length === 1 && event.keysChanged.has('share')) changed.add(String(event.path[0]));
+      }
+      // Read the final transaction state, including replaced/deleted records.
+      for (const id of changed) readReference(id);
+    });
+  }
+  const reference = (id: string) => sharedPage ? (id === primary.shared?.id ? primary.shared : undefined) : references.get(id);
   const contentId = (id: string) => reference(id)?.id ?? id;
   const owner = (id: string): StowStore => {
     const ref = reference(id) ?? scopes.get(id)?.shared;
