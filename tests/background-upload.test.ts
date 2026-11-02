@@ -3,7 +3,7 @@ import { IDBFactory } from 'fake-indexeddb';
 import { afterEach, beforeEach, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { uploadBackgroundLog, BACKGROUND_UPLOAD_INTERVAL } from '../src/core/background-upload';
-import { readBackgroundLog, recordBackgroundEvent } from '../src/core/background-state';
+import { openBackgroundDatabase, readBackgroundLog, recordBackgroundEvent } from '../src/core/background-state';
 
 const account = { user: 'alice', vaultId: 'background-upload-alice', authMode: 'proxy' as const };
 const originalLocks = Object.getOwnPropertyDescriptor(navigator, 'locks');
@@ -19,8 +19,31 @@ beforeEach(() => {
     },
   } });
 });
-const record = () => recordBackgroundEvent(account, { kind: 'registration-check', standalone: true });
+const record = () => recordBackgroundEvent(account, { kind: 'registration-check', standalone: true }, null);
 const upload = (source: 'foreground' | 'background' = 'foreground') => uploadBackgroundLog(account, 'https://stow.test', source, null);
+
+test('queued events retain their recording builds across upgrades and upload retries', async t => {
+  const oldTab = 'a'.repeat(40), worker = 'b'.repeat(40), uploader = 'c'.repeat(40), retry = 'd'.repeat(40);
+  await recordBackgroundEvent(account, { kind: 'registration-check', standalone: true }, oldTab);
+  await recordBackgroundEvent(account, { kind: 'wake', runId: crypto.randomUUID() }, worker);
+  // An event already queued by the deployed, unstamped client has no known build.
+  const db = await openBackgroundDatabase();
+  await db.add('events', { vaultId: account.vaultId, at: 1000, kind: 'registration-check', standalone: false });
+  db.close();
+  assert.deepEqual((await readBackgroundLog(account)).events.map(event => event.build), [oldTab, worker, undefined]);
+  const batches: any[] = [];
+  t.mock.method(globalThis, 'fetch', async (url: URL, init?: RequestInit) => {
+    if (url.pathname === '/api/session') return Response.json({ ...account, authenticated: true });
+    const batch = JSON.parse(String(init!.body)); batches.push(batch);
+    if (batches.length === 1) throw new TypeError('Lost acknowledgment');
+    return Response.json({ deviceId: batch.deviceId, through: batch.through });
+  });
+  await assert.rejects(uploadBackgroundLog(account, 'https://stow.test', 'foreground', uploader), /Lost acknowledgment/);
+  await uploadBackgroundLog(account, 'https://stow.test', 'background', retry);
+  assert.deepEqual(batches.map(batch => batch.build), [uploader, retry]);
+  assert.deepEqual(batches[0].events.map((event: any) => event.build), [oldTab, worker, undefined]);
+  assert.deepEqual(batches[1].events, batches[0].events);
+});
 
 test('automatic uploads are throttled, delta-only, and retain events written during an upload', async t => {
   let now = 1000000;

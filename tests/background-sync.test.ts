@@ -111,11 +111,11 @@ test('background diagnostics report attempts independently of foreground sync an
 
 test('the background log is bounded per account, survives reopening, and records unfinished attempts', async () => {
   const other = { ...account, vaultId: 'another-background-account' };
-  await recordBackgroundEvent(other, { kind: 'wake', runId: 'other-run' });
+  await recordBackgroundEvent(other, { kind: 'wake', runId: 'other-run' }, null);
   for (let i = 0; i < BACKGROUND_LOG_LIMIT + 3; i++) {
-    await recordBackgroundEvent(account, { kind: 'wake', runId: String(i) });
+    await recordBackgroundEvent(account, { kind: 'wake', runId: String(i) }, null);
   }
-  await recordBackgroundEvent(account, { kind: 'started', runId: 'interrupted' });
+  await recordBackgroundEvent(account, { kind: 'started', runId: 'interrupted' }, null);
   const log = await readBackgroundLog(account);
   assert.equal(log.events.length, BACKGROUND_LOG_LIMIT);
   assert.equal(log.events[0].kind, 'wake');
@@ -138,11 +138,13 @@ for (const busy of [false, true]) test(`a real wake records ${busy ? 'a skipped 
   // A wall-clock correction during refresh must not create a negative duration
   // that the diagnostic server would reject, blocking all subsequent log batches.
   const fetch = t.mock.method(globalThis, 'fetch', async () => { now -= 1000; return new Response('', { status: 401 }); });
-  if (busy) await runBackgroundSync('http://localhost');
-  else await assert.rejects(runBackgroundSync('http://localhost'), /HTTP 401/);
+  const build = 'b'.repeat(40);
+  if (busy) await runBackgroundSync('http://localhost', build);
+  else await assert.rejects(runBackgroundSync('http://localhost', build), /HTTP 401/);
   const { events, result } = await readBackgroundLog(account);
   assert.deepEqual(events.map(event => event.kind), busy ? ['wake', 'skipped'] : ['wake', 'started', 'failure']);
   assert.equal(new Set(events.map(event => 'runId' in event ? event.runId : null)).size, 1);
+  assert.deepEqual([...new Set(events.map(event => event.build))], [build]);
   assert.equal(fetch.mock.callCount(), busy ? 0 : 2); // The uploader independently verifies identity.
   if (!busy) assert.match(result!.error!, /HTTP 401/);
   const failure = events.find(event => event.kind === 'failure');
@@ -156,7 +158,7 @@ test('adding the event log keeps an existing background registration and last su
   await old.put('account', account, 'active');
   await old.put('results', { attemptedAt: 100, completedAt: 200 }, account.vaultId);
   old.close();
-  await recordBackgroundEvent(account, { kind: 'registration', availability: 'enabled', standalone: true, permission: 'granted' });
+  await recordBackgroundEvent(account, { kind: 'registration', availability: 'enabled', standalone: true, permission: 'granted' }, null);
   const log = await readBackgroundLog(account);
   assert.deepEqual(log.result, { attemptedAt: 100, completedAt: 200 });
   assert.equal(log.events.length, 1);

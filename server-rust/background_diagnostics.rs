@@ -68,6 +68,9 @@ enum Detail {
 pub struct Event {
     seq: u64,
     at: f64,
+    // The producing tab/worker's revision, not the uploader's. Previously
+    // queued and stored events without this field have unknown provenance.
+    build: Option<String>,
     #[serde(flatten)]
     detail: Detail,
 }
@@ -130,6 +133,9 @@ fn number(value: f64) -> bool {
 fn message(value: &str) -> bool {
     value.len() <= 4000
 }
+fn valid_build(value: Option<&str>) -> bool {
+    value.is_none_or(|build| build.len() == 40 && build.bytes().all(|c| c.is_ascii_hexdigit()))
+}
 pub fn parse(value: Value) -> Result<Upload> {
     let invalid = || Error::request(400, "Invalid background diagnostic report.");
     let upload: Upload = serde_json::from_value(value).map_err(|_| invalid())?;
@@ -138,16 +144,17 @@ pub fn parse(value: Value) -> Result<Upload> {
         || upload.events.len() > 200
         || upload.through > MAX_SAFE
         || upload.dropped_unacknowledged > MAX_SAFE
-        || upload
-            .build
-            .as_ref()
-            .is_some_and(|build| build.len() != 40 || !build.bytes().all(|c| c.is_ascii_hexdigit()))
+        || !valid_build(upload.build.as_deref())
     {
         return Err(invalid());
     }
     let mut previous = 0;
     for event in &upload.events {
-        if event.seq <= previous || event.seq > upload.through || !number(event.at) {
+        if event.seq <= previous
+            || event.seq > upload.through
+            || !number(event.at)
+            || !valid_build(event.build.as_deref())
+        {
             return Err(invalid());
         }
         previous = event.seq;

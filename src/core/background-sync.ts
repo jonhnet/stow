@@ -92,30 +92,30 @@ function download(url: string, vector: Uint8Array, signal: AbortSignal, save: (u
 }
 
 /** One bounded attempt per browser opportunity; no timer loop or hidden retries. */
-export async function runBackgroundSync(origin: string, build: string | null = null) {
+export async function runBackgroundSync(origin: string, build: string | null) {
   const db = await openBackgroundDatabase();
   try {
     const account = await db.get('account', 'active'); if (!account) return;
     const runId = crypto.randomUUID();
-    await recordBackgroundEvent(account, { kind: 'wake', runId });
+    await recordBackgroundEvent(account, { kind: 'wake', runId }, build);
     try { await navigator.locks.request('stow-background-sync', { ifAvailable: true }, async lock => {
       if (!lock) {
-        await recordBackgroundEvent(account, { kind: 'skipped', runId, message: 'Another background refresh is running.' });
+        await recordBackgroundEvent(account, { kind: 'skipped', runId, message: 'Another background refresh is running.' }, build);
         return;
       }
       const previous = await db.get('results', account.vaultId);
       const result = { attemptedAt: Date.now(), completedAt: previous?.completedAt };
       const started = performance.now();
       await db.put('results', result, account.vaultId);
-      await recordBackgroundEvent(account, { kind: 'started', runId });
+      await recordBackgroundEvent(account, { kind: 'started', runId }, build);
       try {
         const { receivedBytes } = await refreshBackgroundAccount(account, origin, AbortSignal.timeout(45_000));
         await db.put('results', { ...result, completedAt: Date.now() }, account.vaultId);
-        await recordBackgroundEvent(account, { kind: 'success', runId, durationMs: performance.now() - started, receivedBytes });
+        await recordBackgroundEvent(account, { kind: 'success', runId, durationMs: performance.now() - started, receivedBytes }, build);
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         await db.put('results', { ...result, error: message }, account.vaultId);
-        await recordBackgroundEvent(account, { kind: 'failure', runId, durationMs: performance.now() - started, message });
+        await recordBackgroundEvent(account, { kind: 'failure', runId, durationMs: performance.now() - started, message }, build);
         throw error;
       }
     }); } finally {

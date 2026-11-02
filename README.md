@@ -27,7 +27,8 @@ starts, skipped overlaps, failures, and successful downloads (duration and bytes
 Wake/start records are durable before the work begins, so an interrupted attempt
 remains visible. Logs upload automatically on opening/reconnecting, roughly every
 five minutes while Stow is open, and after background refresh attempts. Uploads
-include a persistent browser-profile identifier, browser, and build, but no note
+include a persistent browser-profile identifier, browser, and the originating
+client build on each event, but no note
 text or images. Offline records wait locally for a verified connection. The server
 retains up to 30 days, 5,000 events per device, and 16 devices per account; see
 [diagnostic storage and retrieval](docs/storage-protocol.md#background-diagnostics).

@@ -11,6 +11,41 @@ fn upload(device: &str, from: u64, to: u64) -> Value {
         "events":(from..=to).map(|seq| json!({"seq":seq,"at":1000,"kind":"registration","availability":"not-permitted","permission":"denied","standalone":true})).collect::<Vec<_>>()})
 }
 
+#[test]
+fn event_builds_survive_new_uploaders_retries_and_unstamped_events() {
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("logs.json");
+    let tab = "a".repeat(40);
+    let worker = "b".repeat(40);
+    let uploader = "c".repeat(40);
+    let retry = "d".repeat(40);
+    let mut body = upload(DEVICE, 1, 4);
+    body["build"] = json!(uploader);
+    body["events"][0]["build"] = json!(tab);
+    body["events"][1]["build"] = json!(worker);
+    // Missing (already queued before stamping) and explicitly unknown builds.
+    body["events"][3]["build"] = Value::Null;
+    logs::accept(
+        &file,
+        logs::parse(body.clone()).unwrap(),
+        "browser".into(),
+        1000.,
+    )
+    .unwrap();
+    let first = logs::read(&file, 1001.).unwrap();
+    let device = &first["devices"][0];
+    assert_eq!(device["lastUploadBuild"], uploader);
+    assert_eq!(device["events"][0]["build"], tab);
+    assert_eq!(device["events"][1]["build"], worker);
+    assert!(device["events"][2]["build"].is_null());
+    assert!(device["events"][3]["build"].is_null());
+    body["build"] = json!(retry);
+    logs::accept(&file, logs::parse(body).unwrap(), "browser".into(), 2000.).unwrap();
+    let after = logs::read(&file, 2001.).unwrap();
+    assert_eq!(after["devices"][0]["lastUploadBuild"], retry);
+    assert_eq!(after["devices"][0]["events"], device["events"]);
+}
+
 #[tokio::test]
 async fn background_logs_are_bound_to_the_account_and_survive_restart_without_a_vault_crdt() {
     let dir = tempfile::tempdir().unwrap();
@@ -159,6 +194,8 @@ fn background_reports_validate_events_and_do_not_acknowledge_failed_persistence(
         json!({"source":"notes"}),
         json!({"events":[{"seq":1,"at":1,"kind":"note-content"}]}),
         json!({"events":[{"seq":1,"at":1,"kind":"failure","runId":DEVICE,"durationMs":-1,"message":"error"}]}),
+        json!({"events":[{"seq":1,"at":1,"kind":"registration-check","standalone":true,"build":"too-short"}]}),
+        json!({"events":[{"seq":1,"at":1,"kind":"registration-check","standalone":true,"build":"g".repeat(40)}]}),
     ] {
         let mut report = upload(DEVICE, 1, 1);
         report

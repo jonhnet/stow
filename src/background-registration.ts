@@ -1,4 +1,5 @@
 import type { Account } from './core/account';
+import { BUILD_INFO } from './build-info';
 import { BACKGROUND_INTERVAL, BACKGROUND_TAG, rememberBackgroundAccount, recordBackgroundEvent, type BackgroundAvailability } from './core/background-state';
 
 interface PeriodicRegistration extends ServiceWorkerRegistration {
@@ -12,9 +13,9 @@ export async function registerBackgroundSync(account: Account): Promise<Backgrou
   // may still wake, and must never target a previously signed-in account.
   await rememberBackgroundAccount(account);
   const standalone = matchMedia('(display-mode: standalone)').matches;
-  await recordBackgroundEvent(account, { kind: 'registration-check', standalone });
+  await recordBackgroundEvent(account, { kind: 'registration-check', standalone }, BUILD_INFO.commit);
   const record = async (availability: BackgroundAvailability, permission?: PermissionState, message?: string) => {
-    await recordBackgroundEvent(account, { kind: 'registration', availability, standalone, permission, message });
+    await recordBackgroundEvent(account, { kind: 'registration', availability, standalone, permission, message }, BUILD_INFO.commit);
     return availability;
   };
   try {

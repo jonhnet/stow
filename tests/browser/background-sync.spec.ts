@@ -55,6 +55,10 @@ test('periodic sync fetches a remote note with every Stow window closed, then op
       const reports = await response.json();
       return reports.devices.some((device: any) => device.lastBackgroundAt && device.events.some((event: any) => event.kind === 'success'));
     }).toBe(true);
+    const stored = await (await context.request.get(`${origin}/api/diagnostics/background`, { headers: { 'X-Stow-Vault': account.vaultId } })).json();
+    const device = stored.devices.find((device: any) => device.lastBackgroundAt);
+    expect(device.lastUploadBuild).toMatch(/^[0-9a-f]{40}$/);
+    expect(device.events.every((event: any) => event.build === device.lastUploadBuild)).toBe(true);
     expect(context.pages().map(page => page.url())).toEqual(['about:blank']);
     await context.setOffline(true);
     const offline = await context.newPage(); await offline.goto(origin);
@@ -73,6 +77,7 @@ test('periodic sync fetches a remote note with every Stow window closed, then op
     expect(wake[2].receivedBytes).toBeGreaterThan(0);
     expect(log.vaultId).toBe(account.vaultId);
     expect(log.deviceId).toBeTruthy();
+    expect(wake.every((event: any) => event.build === log.build.commit)).toBe(true);
     expect(text).not.toContain('Background flight plan');
   } finally { await context.close(); await writer.close(); }
 });
@@ -98,6 +103,8 @@ test('devices automatically upload, retry a lost acknowledgment without duplicat
     await expect.poll(async () => (await reports()).length).toBe(1);
     const first = (await reports())[0];
     expect(first.events.some((event: any) => event.kind === 'registration')).toBe(true);
+    expect(first.lastUploadBuild).toMatch(/^[0-9a-f]{40}$/);
+    expect(first.events.every((event: any) => event.build === first.lastUploadBuild)).toBe(true);
     const second = await b.newPage(); await second.goto(host);
     await expect.poll(async () => (await reports()).length).toBe(2);
     expect(new Set((await reports()).map((device: any) => device.deviceId)).size).toBe(2);

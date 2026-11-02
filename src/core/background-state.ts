@@ -13,7 +13,8 @@ export type BackgroundDetail =
   | { kind: 'skipped'; runId: string; message: string }
   | { kind: 'success'; runId: string; durationMs: number; receivedBytes: number }
   | { kind: 'failure'; runId: string; durationMs: number; message: string };
-export type BackgroundEvent = BackgroundDetail & { at: number; vaultId: string };
+// Older queued events have no build; leave their provenance unknown.
+export type BackgroundEvent = BackgroundDetail & { at: number; vaultId: string; build?: string | null };
 interface BackgroundDatabase extends DBSchema {
   account: { key: string; value: Account };
   results: { key: string; value: BackgroundResult };
@@ -50,7 +51,7 @@ export async function readBackgroundResult(account: Account): Promise<Background
 
 /** Durable before doing the work, so termination leaves a wake/start without a
  * completion. Keep diagnostic storage bounded and free of note contents. */
-export async function recordBackgroundEvent(account: Account, detail: BackgroundDetail) {
+export async function recordBackgroundEvent(account: Account, detail: BackgroundDetail, build: string | null) {
   assertAccountScope(account);
   const db = await openBackgroundDatabase();
   try {
@@ -59,7 +60,8 @@ export async function recordBackgroundEvent(account: Account, detail: Background
     if (!await metadata.get('deviceId')) await metadata.put(crypto.randomUUID(), 'deviceId');
     const events = tx.objectStore('events');
     const bounded = 'message' in detail && detail.message ? { ...detail, message: detail.message.slice(0, 1000) } : detail;
-    await events.add({ ...bounded, at: Date.now(), vaultId: account.vaultId });
+    // Capture the producing tab/worker's build now, not the later uploader's.
+    await events.add({ ...bounded, at: Date.now(), vaultId: account.vaultId, build });
     const keys = await events.index('vaultId').getAllKeys(account.vaultId);
     const removed = keys.slice(0, -BACKGROUND_LOG_LIMIT);
     const uploaded = Number(await metadata.get(`uploaded:${account.vaultId}`) ?? 0);

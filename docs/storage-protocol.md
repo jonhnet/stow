@@ -42,6 +42,13 @@ profile ID. Registration checks, permissions, actual worker wakes, starts,
 skipped overlaps, errors, and successful download durations/byte counts are
 recorded. No note text or images are included.
 
+Each event carries `build`, the full application Git commit compiled into the
+tab or service worker that recorded it. The stamp is saved with the event before
+uploading and remains unchanged across upgrades, uploads by a different tab or
+worker, and retries. Events queued or stored before stamping was introduced have
+an absent or null build, meaning unknown; they are never attributed to the later
+uploader or the currently deployed server.
+
 After account verification, foreground visits/reconnects attempt an upload and
 retry about every five minutes while open, using the existing connection check.
 The five-minute throttle persists across tabs/reloads, including failed attempts.
@@ -66,6 +73,8 @@ Retention is 30 days by server receipt time, up to 5,000 events per device and
 inactive files are not swept by a separate timer. Each device includes its
 browser, last upload's build, last foreground/background upload times, client
 event times, server receipt times, and unacknowledged-drop count.
+The device's `lastUploadBuild` describes only its latest uploader; use each
+event's `build` to compare background behavior across client versions.
 
 An authenticated `GET /api/diagnostics/background` with the matching
 `X-Stow-Vault` returns that account's devices and events. Operators can also read
