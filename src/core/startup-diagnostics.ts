@@ -1,3 +1,4 @@
+import { stowFetch } from './shell';
 import { navigationFields, resourceFields, type StartupCounter, type StartupMark, type StartupReport } from './startup-report';
 import { IS_DEMO } from '../runtime';
 
@@ -62,7 +63,7 @@ function report(reason: StartupReport['reason']) {
     resources, frameGaps,
   };
   // Reports never block startup, and their failure never changes vault state.
-  void fetch('/api/diagnostics/startup', {
+  void stowFetch('/api/diagnostics/startup', {
     method: 'POST', redirect: 'manual', keepalive: true,
     headers: { 'Content-Type': 'application/json', 'X-Stow-Vault': account },
     body: JSON.stringify(payload), signal: AbortSignal.timeout(10000),

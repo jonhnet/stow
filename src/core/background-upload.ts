@@ -1,5 +1,6 @@
 import { assertAccountScope, parseAccount, type Account } from './account';
 import { openBackgroundDatabase } from './background-state';
+import { stowFetch } from './shell';
 
 export const BACKGROUND_UPLOAD_INTERVAL = 5 * 60 * 1000;
 
@@ -19,7 +20,7 @@ export async function uploadBackgroundLog(account: Account, origin: string, sour
       if (!deviceId) return;
       await db.put('metadata', String(now), attemptKey);
       const signal = AbortSignal.timeout(10_000);
-      const session = await fetch(new URL('/api/session', origin), { credentials: 'include', redirect: 'manual', cache: 'no-store', signal });
+      const session = await stowFetch(new URL('/api/session', origin), { credentials: 'include', redirect: 'manual', cache: 'no-store', signal });
       if (!session.ok) throw new Error(`Background log upload could not verify the account (HTTP ${session.status}).`);
       const payload = await session.json();
       const verified = parseAccount(payload);
@@ -38,7 +39,7 @@ export async function uploadBackgroundLog(account: Account, origin: string, sour
       const through = Number(cursor ?? 0);
       const events = values.map(({ vaultId: _vaultId, ...event }, index) => ({ ...event, seq: keys[index] })).filter(event => event.seq > through);
       const sentThrough = events.at(-1)?.seq ?? through;
-      const response = await fetch(new URL('/api/diagnostics/background', origin), {
+      const response = await stowFetch(new URL('/api/diagnostics/background', origin), {
         method: 'POST', credentials: 'include', redirect: 'manual', signal,
         headers: { 'Content-Type': 'application/json', 'X-Stow-Vault': account.vaultId },
         body: JSON.stringify({ schema: 1, deviceId, source, build, through: sentThrough, events, droppedUnacknowledged: Number(dropped ?? 0) }),

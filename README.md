@@ -11,7 +11,7 @@ run afterward; a slow network does not hold the cache behind a spinner. A newly
 verified different account stops sync and asks for a reload, keeping pending
 edits in their original account. A fresh device still needs its initial download.
 
-Installed apps can refresh notes while closed when the browser grants Periodic
+Installed PWAs can refresh notes while closed when the browser grants Periodic
 Background Sync permission. Stow requests opportunities at least an hour apart;
 the browser chooses the actual timing and may not run them. Settings shows
 eligibility, the last successful sync, and the background worker’s last attempt,
@@ -21,6 +21,14 @@ requires a still-valid sign-in. Image fetching and uploading local edits happen
 when Stow is open. Before relying on a newly edited note offline, open Stow on that
 device while connected and check that the note has arrived.
 
+The [native Android shell](docs/android-shell.md) uses Android WorkManager instead
+of browser background scheduling: a 15-minute periodic request plus network
+availability opportunities, without Firebase or Google Play services. It uses the
+same offline editor, downloads web releases independently of APK updates, and
+opens cached notes immediately. Android power policy can still defer work. The
+build, account-pairing, proxy setup, and emulator checks are documented in that
+plan.
+
 Settings → **Download background log** exports this device's most recent 200
 events for the current account: permission/registration checks, browser wake-ups,
 starts, skipped overlaps, failures, and successful downloads (duration and bytes).
@@ -28,7 +36,7 @@ Wake/start records are durable before the work begins, so an interrupted attempt
 remains visible. Logs upload automatically on opening/reconnecting, roughly every
 five minutes while Stow is open, and after background refresh attempts. Uploads
 include a persistent browser-profile identifier, browser, and the originating
-client build on each event, but no note
+client build on each event; native refreshes also include shell version and scheduling trigger, but no note
 text or images. Offline records wait locally for a verified connection. The server
 retains up to 30 days, 5,000 events per device, and 16 devices per account; see
 [diagnostic storage and retrieval](docs/storage-protocol.md#background-diagnostics).
@@ -86,6 +94,8 @@ For an installer-managed server, follow the [home](docs/HOME_HOSTING.md#back-up-
 Back up the **complete data directory**, including the `shared/`, `sharing/`, and `share-references/` directories for [shared notes](docs/sharing.md), `session-secret`, `vault-incarnations.json` if an [account reset](docs/account-reset.md) has been performed, and each vault's `account.json`, `vault.yjs`, `updates/`, `blobs/`, `blob-cleanup.json`, `history/`, and `history-retention.json` under `users/` (or the data directory itself in password mode). A snapshot alone can omit newer edits stored in `updates/`. Include any retained original files too. The server secret and account reset registry determine current user vault IDs, so preserve them. Stop the service first so snapshots, update logs, and blobs are copied together consistently. For the container described in the [Podman guide](docs/PODMAN.md), run `podman stop stow` before copying its volume and `podman start stow` afterward.
 
 To identify a vault directory, read its `account.json`: it records the verified username, authentication mode, and vault ID. Older directories acquire this file when their owner next opens Stow. Directories without it have an unknown owner; the server does not infer one from their contents.
+
+For Android installations, include `device-access.json` (paired device authorizations) and `android-release/` (the published APK and its metadata). Keep the Android release signing keystore in a separate secure backup; it is required to update existing installations.
 
 Back up the private workspace `.env` separately with appropriate access controls. The source checkout and disposable `build/` directory are not vault backups.
 

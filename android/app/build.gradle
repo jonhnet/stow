@@ -1,0 +1,61 @@
+plugins { id 'com.android.application' }
+android {
+    namespace 'net.stowapp.android'
+    compileSdk 35
+    defaultConfig {
+        applicationId 'net.stowapp.android'
+        minSdk 28
+        targetSdk 35
+        versionCode = Integer.parseInt(providers.gradleProperty('stowVersionCode').getOrElse('1'))
+        versionName = providers.gradleProperty('stowVersionName').getOrElse('0.1')
+        testInstrumentationRunner 'androidx.test.runner.AndroidJUnitRunner'
+        buildConfigField 'int', 'SHELL_API', '1'
+    }
+    buildFeatures { buildConfig true }
+    compileOptions { sourceCompatibility JavaVersion.VERSION_17; targetCompatibility JavaVersion.VERSION_17 }
+    signingConfigs {
+        debug { storeFile rootProject.file("../../build/android-shell/debug.keystore") }
+        release {
+            if (System.getenv('STOW_ANDROID_KEYSTORE')) {
+                storeFile file(System.getenv('STOW_ANDROID_KEYSTORE'))
+                storePassword System.getenv('STOW_ANDROID_STORE_PASSWORD')
+                keyAlias System.getenv('STOW_ANDROID_KEY_ALIAS')
+                keyPassword System.getenv('STOW_ANDROID_KEY_PASSWORD')
+            }
+        }
+    }
+    buildTypes { release { if (System.getenv('STOW_ANDROID_KEYSTORE')) signingConfig signingConfigs.release } }
+}
+dependencies {
+    implementation 'androidx.work:work-runtime:2.10.1'
+    implementation 'androidx.webkit:webkit:1.12.1'
+    implementation 'androidx.core:core:1.15.0'
+    testImplementation 'junit:junit:4.13.2'
+    testImplementation 'org.json:json:20240303'
+    androidTestImplementation 'androidx.test:runner:1.6.2'
+    androidTestImplementation 'androidx.test.ext:junit:1.2.1'
+}
+
+// Stage APK and metadata together. Publish the APK first, then atomically replace
+// DATA_DIR/android-release/release.json; ordinary web deploys never touch it.
+['Debug', 'Release'].each { variant ->
+    tasks.register("stageStow${variant}") {
+        dependsOn "assemble${variant}"
+        doLast {
+            if (variant == 'Release' && !System.getenv('STOW_ANDROID_KEYSTORE')) throw new GradleException('Set the release signing credentials before staging an APK for publication.')
+            def kind = variant.toLowerCase()
+            def apk = layout.buildDirectory.file("outputs/apk/${kind}/app-${kind}.apk").get().asFile
+            def bytes = apk.bytes
+            def digest = java.security.MessageDigest.getInstance('SHA-256').digest(bytes).encodeHex().toString()
+            def name = "stow-${android.defaultConfig.versionCode}-${digest.take(12)}.apk"
+            def destination = rootProject.file("../../build/android-shell/publish/${kind}")
+            delete(destination)
+            destination.mkdirs()
+            new File(destination, name).bytes = bytes
+            new File(destination, 'release.json').text = groovy.json.JsonOutput.prettyPrint(groovy.json.JsonOutput.toJson([
+                version: android.defaultConfig.versionCode, minSdk: android.defaultConfig.minSdkVersion.apiLevel,
+                url: "/native/android/${name}", sha256: digest
+            ])) + '\n'
+        }
+    }
+}

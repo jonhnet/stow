@@ -1,3 +1,7 @@
+#[path = "android_releases.rs"]
+mod android_releases;
+#[path = "devices.rs"]
+mod devices;
 #[path = "sharing.rs"]
 pub(crate) mod sharing;
 use crate::storage::DurableUpdate;
@@ -322,6 +326,8 @@ pub struct ServerState {
     incarnations: account_reset::Incarnations,
     metadata_lock: Mutex<()>,
     sharing_lock: Mutex<()>,
+    devices_lock: Mutex<()>,
+    devices_changed: tokio::sync::broadcast::Sender<()>,
     membership_changes: tokio::sync::broadcast::Sender<Option<String>>,
     transfer_budget: Budget,
     failures: Mutex<HashMap<String, Attempt>>,
@@ -386,6 +392,9 @@ impl ServerState {
         self.authenticate_private(headers)
     }
     fn authenticate_private(&self, headers: &HeaderMap) -> Result<Principal> {
+        if let Some(token) = devices::credential(headers) {
+            return devices::authenticate(self, token);
+        }
         if self.config.auth_mode == AuthMode::Proxy {
             let user = identity::proxy_identity(headers, &self.config.proxy_secret)?;
             let vault_id =
@@ -678,6 +687,8 @@ pub async fn start(config: Config) -> Result<Running> {
         incarnations,
         metadata_lock: Mutex::new(()),
         sharing_lock: Mutex::new(()),
+        devices_lock: Mutex::new(()),
+        devices_changed: tokio::sync::broadcast::channel(32).0,
         membership_changes: tokio::sync::broadcast::channel(128).0,
         transfer_budget: Budget::default(),
         failures: Mutex::new(HashMap::new()),
@@ -704,6 +715,7 @@ pub async fn start(config: Config) -> Result<Running> {
     let address = listener.local_addr()?;
     let app = Router::new()
         .route("/sync", get(upgrade))
+        .route("/native/sync", get(upgrade))
         .fallback(http_handler)
         .with_state(state.clone());
     let stop = state.shutdown.clone();
@@ -802,8 +814,76 @@ async fn http_handler(
 async fn handle_http(
     state: Arc<ServerState>,
     remote: SocketAddr,
-    request: Request<Body>,
+    mut request: Request<Body>,
 ) -> Result<Response> {
+    let native_path = request.uri().path().to_owned();
+    if native_path == "/native/release.json"
+        && matches!(*request.method(), Method::GET | Method::HEAD)
+    {
+        return android_releases::manifest(&state).await;
+    }
+    if let Some(path) = native_path.strip_prefix("/native/android/") {
+        if path.starts_with('.')
+            || !path.ends_with(".apk")
+            || !path
+                .bytes()
+                .all(|c| c.is_ascii_alphanumeric() || b"._-".contains(&c))
+        {
+            return Err(Error::request(404, "Unknown Android artifact"));
+        }
+        return static_file(
+            &state.config.data_dir.join("android-release"),
+            &format!("/{path}"),
+            request.method(),
+            false,
+        )
+        .await;
+    }
+
+    if native_path.starts_with("/native/device/")
+        || native_path == "/api/devices"
+        || native_path.starts_with("/api/devices/")
+    {
+        return devices::api(state, request).await;
+    }
+    if let Some(path) = native_path.strip_prefix("/native/") {
+        if path.starts_with("api/") {
+            let token = devices::credential(request.headers())
+                .ok_or_else(|| Error::request(401, "Device authorization required"))?;
+            devices::authenticate(&state, token)?;
+            // Device endpoints never expose browser login or device management.
+            if path.starts_with("api/devices") || matches!(path, "api/login" | "api/logout") {
+                return Err(Error::request(
+                    403,
+                    "Use the browser to manage authentication",
+                ));
+            }
+        } else if path != "release.json"
+            && !path.starts_with("assets/")
+            && !path.starts_with("android/")
+            && !matches!(
+                path,
+                "index.html"
+                    | "device.html"
+                    | "background.html"
+                    | "icon.svg"
+                    | "icon-192.png"
+                    | "icon-512.png"
+                    | "icon-maskable-512.png"
+                    | "manifest.webmanifest"
+            )
+        {
+            return Err(Error::request(404, "Unknown native resource"));
+        }
+        let suffix = request
+            .uri()
+            .query()
+            .map(|s| format!("?{s}"))
+            .unwrap_or_default();
+        *request.uri_mut() = format!("/{path}{suffix}")
+            .parse()
+            .map_err(|_| Error::request(400, "Invalid native path"))?;
+    }
     if request.uri().path().starts_with("/api/shares/") {
         return sharing::api(state, request).await;
     }
@@ -812,7 +892,13 @@ async fn handle_http(
     let method = request.method().clone();
     let headers = request.headers().clone();
     if path != "/api" && !path.starts_with("/api/") {
-        return static_file(&state.config.static_dir, &path, &method).await;
+        return static_file(
+            &state.config.static_dir,
+            &path,
+            &method,
+            !native_path.starts_with("/native/"),
+        )
+        .await;
     }
     if !state.origin_allowed(&headers) {
         return Err(Error::request(403, "Origin is not allowed"));
@@ -1300,7 +1386,12 @@ fn blob_sources(headers: &HeaderMap) -> Result<Vec<String>> {
     }
     Ok(sources)
 }
-async fn static_file(directory: &Path, path: &str, method: &Method) -> Result<Response> {
+async fn static_file(
+    directory: &Path,
+    path: &str,
+    method: &Method,
+    allow_spa: bool,
+) -> Result<Response> {
     if method != Method::GET && method != Method::HEAD {
         return Err(Error::request(404, "Not found"));
     }
@@ -1319,6 +1410,9 @@ async fn static_file(directory: &Path, path: &str, method: &Method) -> Result<Re
         && canonical.is_file()
     {
         file = Some(canonical);
+    }
+    if file.is_none() && !allow_spa {
+        return Err(Error::request(404, "Release asset not found"));
     }
     let filename = file.unwrap_or_else(|| directory.join("index.html"));
     let bytes=match tokio::fs::read(&filename).await { Ok(v)=>v,Err(e) if e.kind()==std::io::ErrorKind::NotFound=>return Ok((StatusCode::NOT_FOUND,"Stow frontend has not been built. Run npm run build, or use the Vite development server.").into_response()),Err(e)=>return Err(e.into()) };
@@ -1370,6 +1464,9 @@ async fn upgrade(
     }
     if !state.origin_allowed(&headers) {
         return Err(Error::request(403, "Origin is not allowed"));
+    }
+    if uri.path() == "/native/sync" && devices::credential(&headers).is_none() {
+        return Err(Error::request(401, "Device authorization required"));
     }
     let principal = state.authenticate(&headers)?;
     let expected: Vec<_> = url::form_urlencoded::parse(uri.query().unwrap_or("").as_bytes())
@@ -1424,7 +1521,13 @@ async fn upgrade(
             tracker.track_future(async move {
                 let _lease = lease;
                 let _slot = slot;
-                connection(state, principal.vault_id, socket).await
+                connection(
+                    state,
+                    principal.vault_id,
+                    socket,
+                    devices::credential(&headers).map(str::to_owned),
+                )
+                .await
             })
         })
         .into_response())
@@ -1570,7 +1673,19 @@ fn application_failure(error: Error) -> transfer::Failure {
         error => transfer::Failure::invalid(error.to_string()),
     }
 }
-async fn connection(state: Arc<ServerState>, vault_id: String, mut socket: WebSocket) {
+async fn connection(
+    state: Arc<ServerState>,
+    vault_id: String,
+    mut socket: WebSocket,
+    device: Option<String>,
+) {
+    let mut device_changes = state.devices_changed.subscribe();
+    if device
+        .as_ref()
+        .is_some_and(|token| devices::authenticate(&state, token).is_err())
+    {
+        return;
+    }
     let mut membership = state.membership_changes.subscribe();
     let id = state.next_client.fetch_add(1, Ordering::Relaxed);
     let (sender, mut receiver) = mpsc::channel(128);
@@ -1602,6 +1717,10 @@ async fn connection(state: Arc<ServerState>, vault_id: String, mut socket: WebSo
     let outcome:std::result::Result<(),transfer::Failure>=async{loop{
         let frames=tokio::select!{
             _=state.shutdown.cancelled()=>break,
+            _=device_changes.recv(),if device.is_some()=>{
+                if devices::authenticate(&state, device.as_ref().unwrap()).is_err() { break; }
+                continue;
+            },
             change=membership.recv(),if vault_id.starts_with("share_")=>{
                 // Reuse the metadata invalidation envelope understood by older clients.
                 if !matches!(change, Ok(Some(ref changed)) if changed != &vault_id) {

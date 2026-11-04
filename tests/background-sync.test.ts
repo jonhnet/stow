@@ -139,7 +139,7 @@ for (const busy of [false, true]) test(`a real wake records ${busy ? 'a skipped 
   // that the diagnostic server would reject, blocking all subsequent log batches.
   const fetch = t.mock.method(globalThis, 'fetch', async () => { now -= 1000; return new Response('', { status: 401 }); });
   const build = 'b'.repeat(40);
-  if (busy) await runBackgroundSync('http://localhost', build);
+  if (busy) assert.equal(await runBackgroundSync('http://localhost', build), false, 'A skipped worker must not report an older success as its own');
   else await assert.rejects(runBackgroundSync('http://localhost', build), /HTTP 401/);
   const { events, result } = await readBackgroundLog(account);
   assert.deepEqual(events.map(event => event.kind), busy ? ['wake', 'skipped'] : ['wake', 'started', 'failure']);

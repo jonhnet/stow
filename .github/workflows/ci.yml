@@ -88,3 +88,76 @@ jobs:
           name: hosting-${{ matrix.mode }}-diagnostics
           path: build/logs/hosting-${{ matrix.mode }}
           retention-days: 7
+  android:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    defaults:
+      run:
+        working-directory: stow-git
+        shell: bash
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          path: stow-git
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: '22'
+          package-manager-cache: false
+      - name: Install native build dependencies
+        run: sudo apt-get update && sudo apt-get install -y build-essential pkg-config imagemagick
+      - name: Build the test server and web release
+        run: |
+          ./setup.sh
+          npm run browsers:install -- --with-deps
+          export STOW_SOURCE_DIR="$PWD"
+          . scripts/environment.sh
+          cargo build --locked --features test-support
+          npx tsc --noEmit
+          npx vite build
+      - name: Prepare an isolated Android SDK and emulator
+        run: |
+          sdkmanager="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+          sdk="$PWD/../build/android-shell/sdk"
+          export JAVA_HOME="$JAVA_HOME_17_X64"
+          mkdir -p "$sdk"
+          set +o pipefail
+          yes | "$sdkmanager" --sdk_root="$sdk" --licenses >/dev/null
+          set -o pipefail
+          "$sdkmanager" --sdk_root="$sdk" 'platform-tools' 'platforms;android-35' 'build-tools;35.0.0' 'emulator' 'system-images;android-36;google_apis;x86_64'
+          mkdir -p "$sdk/cmdline-tools"
+          cp -aL "$ANDROID_HOME/cmdline-tools/latest" "$sdk/cmdline-tools/latest"
+          export ANDROID_AVD_HOME="$PWD/../build/android-shell/avd"
+          mkdir -p "$ANDROID_AVD_HOME"
+          echo no | ANDROID_HOME="$sdk" ANDROID_SDK_ROOT="$sdk" "$sdk/cmdline-tools/latest/bin/avdmanager" create avd --name stow-shell --package 'system-images;android-36;google_apis;x86_64' --path "$ANDROID_AVD_HOME/stow-shell.avd" --force
+          # avdmanager uses the existing tools but the isolated SDK's image.
+          sed -i "s|^image.sysdir.1=.*|image.sysdir.1=$sdk/system-images/android-36/google_apis/x86_64/|" "$ANDROID_AVD_HOME/stow-shell.avd/config.ini"
+          sudo chmod a+rw /dev/kvm
+          ANDROID_HOME="$sdk" ANDROID_SDK_ROOT="$sdk" "$sdk/emulator/emulator" -avd stow-shell -port 5580 -no-window -no-audio -no-snapshot -gpu swiftshader_indirect > ../build/android-shell/emulator.log 2>&1 &
+          timeout 180 "$sdk/platform-tools/adb" -s emulator-5580 wait-for-device
+          for i in $(seq 1 90); do
+            test "$("$sdk/platform-tools/adb" -s emulator-5580 shell getprop sys.boot_completed | tr -d '\r')" = 1 && break
+            sleep 2
+          done
+          test "$("$sdk/platform-tools/adb" -s emulator-5580 shell getprop sys.boot_completed | tr -d '\r')" = 1
+          "$sdk/platform-tools/adb" -s emulator-5580 root
+          "$sdk/platform-tools/adb" -s emulator-5580 wait-for-device
+          "$sdk/platform-tools/adb" -s emulator-5580 shell input keyevent KEYCODE_WAKEUP
+          "$sdk/platform-tools/adb" -s emulator-5580 shell wm dismiss-keyguard
+          echo "ANDROID_HOME=$sdk" >> "$GITHUB_ENV"
+          echo "JAVA_HOME=$JAVA_HOME" >> "$GITHUB_ENV"
+          echo "$sdk/platform-tools" >> "$GITHUB_PATH"
+      - name: Native unit tests, Android instrumentation, and real closed-app offline refresh
+        run: tests/android-shell/run.sh emulator-5580
+      - name: Upload Android diagnostics
+        if: always()
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: android-diagnostics
+          path: |
+            build/android-shell/logs
+            build/android-shell/trial-*/result.json
+            build/android-shell/trial-*/*.txt
+            build/android-shell/trial-*/*.png
+            build/android-shell/emulator.log
+          retention-days: 7

@@ -10,6 +10,7 @@ import { kittenAssets } from './kitten-assets';
 /** The static build substitutes this module for core/store at build time. It
  * never constructs the account, persistence, sync, or image-upload services. */
 class DemoStore implements AppStore {
+  async prepareRestart() { throw new Error('The demo does not run in the Android shell.'); }
   readonly vault = new Vault();
   readonly sharedPage = false;
   async shareNote(): Promise<string> { throw new Error('Sharing is unavailable in the demo.'); }

@@ -1,4 +1,5 @@
 import type { Account } from './core/account';
+import { shellConfig } from './core/shell';
 import { BUILD_INFO } from './build-info';
 import { BACKGROUND_INTERVAL, BACKGROUND_TAG, rememberBackgroundAccount, recordBackgroundEvent, type BackgroundAvailability } from './core/background-state';
 
@@ -12,6 +13,7 @@ export async function registerBackgroundSync(account: Account): Promise<Backgrou
   // Select the account even when registration is denied: a prior registration
   // may still wake, and must never target a previously signed-in account.
   await rememberBackgroundAccount(account);
+  if (shellConfig()) return 'native';
   const standalone = matchMedia('(display-mode: standalone)').matches;
   await recordBackgroundEvent(account, { kind: 'registration-check', standalone }, BUILD_INFO.commit);
   const record = async (availability: BackgroundAvailability, permission?: PermissionState, message?: string) => {

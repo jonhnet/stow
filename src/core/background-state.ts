@@ -4,9 +4,10 @@ import { assertAccountScope, type Account } from './account';
 export const BACKGROUND_TAG = 'stow-notes';
 export const BACKGROUND_INTERVAL = 60 * 60 * 1000;
 export interface BackgroundResult { attemptedAt: number; completedAt?: number; error?: string }
-export type BackgroundAvailability = 'enabled' | 'unavailable' | 'not-permitted' | 'error';
+export type BackgroundAvailability = 'enabled' | 'unavailable' | 'not-permitted' | 'error' | 'native';
 export const BACKGROUND_LOG_LIMIT = 200;
 export type BackgroundDetail =
+  | { kind: 'native'; trigger: string; shellVersion: number; nativeAt: number; message: string }
   | { kind: 'registration-check'; standalone: boolean }
   | { kind: 'registration'; availability: BackgroundAvailability; standalone: boolean; permission?: PermissionState; message?: string }
   | { kind: 'wake' | 'started'; runId: string }

@@ -1,4 +1,5 @@
 import * as Y from 'yjs';
+import { stowFetch } from './shell';
 import type { StowStore, Snapshot } from './store';
 import type { Note, Attachment } from './types';
 import type { Vault } from './vault';
@@ -65,7 +66,7 @@ export function collectionStore(primary: StowStore, create: (ref: SharedReferenc
   const loadParticipants = async (ref: SharedReference) => {
     clearTimeout(memberRetries.get(ref.id));
     const request = (memberRequests.get(ref.id) ?? 0) + 1; memberRequests.set(ref.id, request);
-    const response = await fetch('/api/shares/participants', { headers: { 'X-Stow-Share': capability(ref) }, cache: 'no-store', redirect: 'manual' });
+    const response = await stowFetch('/api/shares/participants', { headers: { 'X-Stow-Share': capability(ref) }, cache: 'no-store', redirect: 'manual' });
     if (!response.ok) {
       if (response.status === 503 && memberRequests.get(ref.id) === request) memberRetries.set(ref.id, setTimeout(() => { void loadParticipants(ref).catch(() => {}); }, 1000));
       throw new Error('Could not load shared participants.');
@@ -167,7 +168,7 @@ export function collectionStore(primary: StowStore, create: (ref: SharedReferenc
     },
     async addSharedToCollection() {
       if (!primary.shared) return;
-      const response = await fetch('/api/shares/add', { method: 'POST', headers: { 'X-Stow-Share': capability(primary.shared), 'X-Stow-Vault': primary.verifiedAccountId() }, redirect: 'manual' });
+      const response = await stowFetch('/api/shares/add', { method: 'POST', headers: { 'X-Stow-Share': capability(primary.shared), 'X-Stow-Vault': primary.verifiedAccountId() }, redirect: 'manual' });
       if (!response.ok) throw new Error('Sign in before adding this note to your collection.');
       location.assign('/');
     },

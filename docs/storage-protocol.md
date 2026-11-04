@@ -76,6 +76,14 @@ event times, server receipt times, and unacknowledged-drop count.
 The device's `lastUploadBuild` describes only its latest uploader; use each
 event's `build` to compare background behavior across client versions.
 
+The Android shell uses this same account-scoped log and upload endpoint through
+its authenticated `/native/api/` route. Its `native` events include the shell
+version, scheduling trigger, native event time, and a bounded diagnostic message;
+the ordinary refresh events retain their web build stamp. Native events survive
+process death and are copied into the next background refresh's upload. Android
+requests a 15-minute interval; the PWA registration continues requesting its
+browser-controlled interval. See [Android shell behavior and tests](android-shell.md).
+
 An authenticated `GET /api/diagnostics/background` with the matching
 `X-Stow-Vault` returns that account's devices and events. Operators can also read
 the JSON files directly to compare devices. Shared-note capabilities cannot read

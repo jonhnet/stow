@@ -1,4 +1,6 @@
+import { downloadText } from '../download';
 import { reloadStow } from '../reload';
+import { stowFetch, networkUrl } from './shell';
 import { collectionStore, landingReference, type SharingActions } from './collection-store';
 import { capability, type SharedReference } from './shared-note';
 import { SyncTransfer, SyncRejectionError, TransferError, unpackSync } from './sync-transfer';
@@ -204,7 +206,7 @@ export class StowStore {
   private fetch = (input: RequestInfo | URL, init: RequestInit = {}) => {
     const headers = new Headers(init.headers);
     if (this.shared) headers.set('X-Stow-Share', capability(this.shared));
-    return fetch(input, { ...init, headers });
+    return stowFetch(input, { ...init, headers });
   };
   private fail(message: string) { this.error = message; this.refresh(); }
   private onUpdate = (update: Uint8Array, origin: unknown) => {
@@ -511,7 +513,8 @@ export class StowStore {
       this.status = 'connecting';
       this.refresh();
       startupMark('socket-start');
-      const socket = new WebSocket(`${location.protocol === 'https:' ? 'wss:' : 'ws:'}//${location.host}/sync?schema=${CURRENT_SCHEMA}&protocol=${SYNC_PROTOCOL_VERSION}&vaultId=${encodeURIComponent(account.vaultId)}`, this.shared ? ['stow-shared', capability(this.shared)] : []);
+      const socketUrl = new URL(networkUrl(`/sync?schema=${CURRENT_SCHEMA}&protocol=${SYNC_PROTOCOL_VERSION}&vaultId=${encodeURIComponent(account.vaultId)}`)); socketUrl.protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
+      const socket = new WebSocket(socketUrl, this.shared ? ['stow-shared', capability(this.shared)] : []);
       this.socket = socket; socket.binaryType = 'arraybuffer';
       const transfer = new SyncTransfer(socket, {
         onFailure: error => {
@@ -678,6 +681,11 @@ export class StowStore {
     } catch (error) {
       this.localError = 'Local storage failed. Export your notes before leaving this tab.'; this.refresh(); throw error;
     }
+  }
+
+  async prepareRestart() {
+    await (this.reloadBarrier?.save() ?? this.saveBeforeReload());
+    if (!(this.reloadBarrier?.safe() ?? this.getSnapshot().canReload)) throw new Error('Wait until your edits are saved on this device before restarting.');
   }
 
   async reloadAccount() {
@@ -879,11 +887,8 @@ export class StowStore {
     const log = await readBackgroundLog(account);
     this.requireAccount();
     const data = { ...log, exportedAt: new Date().toISOString(), build: BUILD_INFO, browser: navigator.userAgent,
-      registration: this.backgroundSync, requestedIntervalMs: BACKGROUND_INTERVAL };
-    const url = URL.createObjectURL(new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' }));
-    const a = document.createElement('a');
-    a.href = url; a.download = `stow-background-${new Date().toISOString().slice(0, 10)}.json`; a.click();
-    setTimeout(() => URL.revokeObjectURL(url), 1000);
+      registration: this.backgroundSync, requestedIntervalMs: this.backgroundSync === 'native' ? 15 * 60 * 1000 : BACKGROUND_INTERVAL };
+    downloadText(JSON.stringify(data, null, 2), 'application/json', `stow-background-${new Date().toISOString().slice(0, 10)}.json`);
   }
 
   verifiedAccountId() {
@@ -911,10 +916,7 @@ export class StowStore {
   }
 
   downloadExport(data: unknown) {
-    const url = URL.createObjectURL(new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' }));
-    const a = document.createElement('a');
-    a.href = url; a.download = `stow-${new Date().toISOString().slice(0, 10)}.json`; a.click();
-    setTimeout(() => URL.revokeObjectURL(url), 1000);
+    downloadText(JSON.stringify(data, null, 2), 'application/json', `stow-${new Date().toISOString().slice(0, 10)}.json`);
   }
 }
 

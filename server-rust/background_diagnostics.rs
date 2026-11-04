@@ -19,6 +19,7 @@ enum Availability {
     Unavailable,
     NotPermitted,
     Error,
+    Native,
 }
 #[derive(Clone, Deserialize, Serialize)]
 #[serde(rename_all = "lowercase")]
@@ -34,6 +35,12 @@ enum Permission {
     rename_all_fields = "camelCase"
 )]
 enum Detail {
+    Native {
+        trigger: String,
+        shell_version: u64,
+        native_at: f64,
+        message: String,
+    },
     RegistrationCheck {
         standalone: bool,
     },
@@ -159,6 +166,12 @@ pub fn parse(value: Value) -> Result<Upload> {
         }
         previous = event.seq;
         let valid = match &event.detail {
+            Detail::Native {
+                trigger,
+                shell_version,
+                native_at,
+                message: msg,
+            } => trigger.len() <= 80 && *shell_version > 0 && native_at.is_finite() && message(msg),
             Detail::RegistrationCheck { .. } => true,
             Detail::Registration { message: msg, .. } => msg.as_ref().is_none_or(|v| message(v)),
             Detail::Wake { run_id } | Detail::Started { run_id } => uuid(run_id),

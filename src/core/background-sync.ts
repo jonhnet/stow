@@ -1,4 +1,5 @@
 import * as Y from 'yjs';
+import { stowFetch, networkUrl } from './shell';
 import { assertAccountScope, parseAccount, type Account } from './account';
 import { assertCurrentSchema, CURRENT_SCHEMA } from './current-schema';
 import { SYNC_PROTOCOL_VERSION } from './protocol-version';
@@ -14,7 +15,7 @@ import { uploadBackgroundLog } from './background-upload';
  * atomic append/compaction used by those writers preserves concurrent changes. */
 export async function refreshBackgroundAccount(account: Account, origin: string, signal: AbortSignal) {
   assertAccountScope(account);
-  const response = await fetch(new URL('/api/session', origin), {
+  const response = await stowFetch(new URL('/api/session', origin), {
     credentials: 'include', cache: 'no-store', redirect: 'manual', signal,
     headers: { 'X-Stow-Schema': CURRENT_SCHEMA, 'X-Stow-Sync-Protocol': SYNC_PROTOCOL_VERSION },
   });
@@ -33,7 +34,7 @@ export async function refreshBackgroundAccount(account: Account, origin: string,
     // Never bootstrap an account in the background; it must have opened normally.
     if (await db.get('maintenance', 'initialSyncComplete') !== 1) throw new Error('Open Stow online once before background sync.');
     applyStoredUpdates(doc, await db.getAll('updates')); assertCurrentSchema(doc);
-    const url = new URL('/sync', origin); url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:';
+    const url = new URL(networkUrl(new URL('/sync', origin))); url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:';
     url.search = new URLSearchParams({ schema: CURRENT_SCHEMA, protocol: SYNC_PROTOCOL_VERSION, vaultId: account.vaultId }).toString();
     await download(url.href, Y.encodeStateVector(doc), signal, async update => {
       signal.throwIfAborted();
@@ -95,13 +96,13 @@ function download(url: string, vector: Uint8Array, signal: AbortSignal, save: (u
 export async function runBackgroundSync(origin: string, build: string | null) {
   const db = await openBackgroundDatabase();
   try {
-    const account = await db.get('account', 'active'); if (!account) return;
+    const account = await db.get('account', 'active'); if (!account) return false;
     const runId = crypto.randomUUID();
     await recordBackgroundEvent(account, { kind: 'wake', runId }, build);
-    try { await navigator.locks.request('stow-background-sync', { ifAvailable: true }, async lock => {
+    try { return await navigator.locks.request('stow-background-sync', { ifAvailable: true }, async lock => {
       if (!lock) {
         await recordBackgroundEvent(account, { kind: 'skipped', runId, message: 'Another background refresh is running.' }, build);
-        return;
+        return false;
       }
       const previous = await db.get('results', account.vaultId);
       const result = { attemptedAt: Date.now(), completedAt: previous?.completedAt };
@@ -112,6 +113,7 @@ export async function runBackgroundSync(origin: string, build: string | null) {
         const { receivedBytes } = await refreshBackgroundAccount(account, origin, AbortSignal.timeout(45_000));
         await db.put('results', { ...result, completedAt: Date.now() }, account.vaultId);
         await recordBackgroundEvent(account, { kind: 'success', runId, durationMs: performance.now() - started, receivedBytes }, build);
+        return true;
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         await db.put('results', { ...result, error: message }, account.vaultId);

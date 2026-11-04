@@ -11,6 +11,7 @@ mod account_metadata_api;
 mod api;
 mod background_diagnostics;
 mod deletion;
+mod devices;
 mod history;
 mod identity;
 mod images;

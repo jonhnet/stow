@@ -4,6 +4,7 @@ import path from 'node:path';
 import { buildDir, defaultDataDir, distDir, sourceDir, workspaceDir } from './paths.ts';
 import { devHttpDiagnostics } from './scripts/dev-http-diagnostics.ts';
 import { buildInfo } from './scripts/build-info.ts';
+import { writeAndroidRelease } from './scripts/android-release.ts';
 const publicOrigin = process.env.STOW_ORIGIN ? new URL(process.env.STOW_ORIGIN) : undefined;
 const dataDir = path.resolve(process.env.DATA_DIR ?? defaultDataDir);
 if (dataDir === sourceDir || dataDir.startsWith(`${sourceDir}${path.sep}`)) {
@@ -17,11 +18,13 @@ export default defineConfig({
   root: sourceDir,
   envDir: workspaceDir,
   cacheDir: path.join(buildDir, 'vite'),
-  build: { outDir: distDir, emptyOutDir: true },
+  build: { outDir: distDir, emptyOutDir: true, rollupOptions: { input: { main: path.join(sourceDir, 'index.html'), background: path.join(sourceDir, 'background.html'), device: path.join(sourceDir, 'device.html') } } },
   // Keep the worker self-contained, with a root URL for its root scope.
   worker: { rollupOptions: { output: { entryFileNames: chunk => chunk.name === 'service-worker' ? 'sw.js' : 'assets/[name]-[hash].js' } } },
   plugins: [react(), devHttpDiagnostics(path.join(buildDir, 'startup-http.json')), {
   name: 'stow-offline-shell',
+  apply: 'build',
+  async closeBundle() { await writeAndroidRelease(distDir); },
   generateBundle(_options, bundle) {
     const assets = ['/', '/index.html', '/icon.svg', '/icon-192.png', '/icon-512.png', '/icon-maskable-512.png', '/manifest.webmanifest', ...Object.keys(bundle).filter(name => !name.endsWith('.map')).map(name => '/' + name)];
     const worker = bundle['sw.js'];

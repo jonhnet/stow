@@ -29,8 +29,10 @@ test('a reload reports cached notes appearing before the delayed session respons
   await page.goto('/?startup-profile=1');
   await expect(page.locator('.app')).toBeVisible();
   await expect(page.locator('.sync-state')).toHaveClass(/sync-online/);
+  let releaseSession!: () => void;
+  const sessionGate = new Promise<void>(resolve => { releaseSession = resolve; });
   await page.route('**/api/session', async route => {
-    await new Promise(resolve => setTimeout(resolve, 500));
+    await sessionGate;
     await route.continue();
   });
   const started = Date.now();
@@ -39,8 +41,15 @@ test('a reload reports cached notes appearing before the delayed session respons
     const report = response.request().postDataJSON();
     return report.reason === 'ready' && report.startedAt >= started - 10;
   });
-  await page.reload();
-  await expect(page.locator('.app')).toBeVisible();
+  try {
+    await page.reload();
+    await expect(page.locator('.app')).toBeVisible();
+    await expect(page.locator('.main-content > .loading-state')).toHaveCount(0);
+    // Hold the server response until presentation. A fixed 500 ms delay raced
+    // CPU contention on CI and did not establish whether startup depended on it.
+    await page.evaluate(() => new Promise<void>(resolve =>
+      requestAnimationFrame(() => requestAnimationFrame(() => requestAnimationFrame(() => resolve())))));
+  } finally { releaseSession(); }
   expect((await uploaded).status()).toBe(201);
   const result = await page.evaluate(async () => {
     const session = await (await fetch('/api/session')).json();
@@ -51,7 +60,7 @@ test('a reload reports cached notes appearing before the delayed session respons
   expect(report.reason).toBe('ready');
   const marks = Object.fromEntries(report.marks.map((entry: { name: string; at: number }) => [entry.name, entry.at]));
   expect(marks['notes-frame']).toBeGreaterThan(0);
-  expect(marks['session-response'] - marks['session-start']).toBeGreaterThanOrEqual(450);
+  expect(marks['session-response']).toBeGreaterThan(marks['session-start']);
   expect(marks['account-verified']).toBeGreaterThanOrEqual(marks['session-response']);
   expect(marks['idb-open-start']).toBeLessThan(marks['session-start']);
   expect(marks['notes-frame']).toBeLessThan(marks['session-response']);

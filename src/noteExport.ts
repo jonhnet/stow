@@ -1,3 +1,4 @@
+import { downloadText } from './download';
 import { checklistGroups, isChecklistGroupChecked } from './core/checklist';
 import type { Attachment, Item, Note } from './core/types';
 import { escapeHtml, markdownHtml, markdownText } from './Markdown';
@@ -71,13 +72,5 @@ export function downloadNotes(notes: readonly Note[], format: NoteExportFormat):
   const base = notes.length === 1 ? notes[0].title : `stow-${notes.length}-notes`;
   const name = Array.from(base.replace(/[\u0000-\u001f\u007f/\\:*?"<>|]/g, '-').trim().replace(/^[. ]+|[. ]+$/g, '')).slice(0, 100).join('');
   const filename = name && !/^(con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\.|$)/i.test(name) ? name : 'stow-notes';
-  const url = URL.createObjectURL(new Blob([content], { type: `${type};charset=utf-8` }));
-  const anchor = document.createElement('a');
-  try {
-    anchor.href = url; anchor.download = `${filename}.${extension}`;
-    document.body.append(anchor); anchor.click();
-  } finally {
-    anchor.remove();
-    setTimeout(() => URL.revokeObjectURL(url), 1000);
-  }
+  downloadText(content, type, `${filename}.${extension}`);
 }
