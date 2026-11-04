@@ -16,6 +16,7 @@ use axum::{
 };
 use hyper_util::rt::TokioIo;
 use serde_json::{Value, json};
+use sha2::{Digest, Sha256};
 use std::{
     io::{BufRead, Write},
     net::SocketAddr,
@@ -78,6 +79,18 @@ pub(crate) async fn shutdown() {
 async fn browser() -> Result<()> {
     let data = tempfile::tempdir()?;
     let users_dir = tempfile::tempdir()?;
+    // Serve a disposable APK publication through the real download endpoint.
+    // Browser-managed downloads do not reliably pass through Playwright routes.
+    let android = users_dir.path().join("android-release");
+    std::fs::create_dir(&android)?;
+    let apk = b"test APK download";
+    std::fs::write(android.join("stow-1-test.apk"), apk)?;
+    std::fs::write(
+        android.join("release.json"),
+        serde_json::to_vec(
+            &json!({"version":1,"minSdk":28,"url":"/native/android/stow-1-test.apk","sha256":hex::encode(Sha256::digest(apk))}),
+        )?,
+    )?;
     let single=server::start(Config::for_test(&json!({"port":4173,"host":"127.0.0.1","dataDir":data.path(),"password":"","authMode":"password"}))?).await?;
     let secret = [7; 32];
     std::fs::write(users_dir.path().join("session-secret"), secret)?;

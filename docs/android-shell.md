@@ -70,6 +70,8 @@ Increment `versionCode` for every APK update and keep the signing key. The appli
 
 Publish the APK into the server's **`DATA_DIR/android-release/`** first; then atomically replace that directory's `release.json` with the generated metadata. This is a public artifact directory: never put signing keys or private configuration there. The native manifest endpoint combines the current web release with this persistent APK announcement. Ordinary web deployments do not need to rebuild, copy, or remember the APK. With no APK publication, compatible web updates still work; malformed/incomplete publications produce an explicit error and cannot displace an installed release.
 
+In the web app or installed PWA, open **Settings → Get Android app** to download the published APK. This link appears when Settings discovers an APK in `/native/release.json`; opening notes never waits for that check. APK publication remains part of the operator's deployment process. The Android shell uses its existing update prompt instead of this initial-install link.
+
 An APK announcement looks like this (the build task supplies the real checksum):
 
 ```json

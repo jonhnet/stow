@@ -20,6 +20,16 @@ test.beforeEach(async ({ context }, info) => {
   }, grant.account);
 });
 
+test('the installed shell uses its update UI instead of offering an APK download in Settings', async ({ page }) => {
+  let checks = 0;
+  await page.route('**/native/release.json', route => { checks++; return route.fulfill({ json: { android: null } }); });
+  await page.goto(origin); await connected(page);
+  await page.getByRole('button', { name: 'Settings', exact: true }).click();
+  await expect(page.getByRole('button', { name: 'Connected Android devices', exact: true })).toBeVisible();
+  await expect(page.getByRole('link', { name: 'Get Android app', exact: true })).toHaveCount(0);
+  expect(checks).toBe(0);
+});
+
 test('updates wait for editor, composition, pointer, selection and modal to finish; restart saves and restores the filtered view', async ({ page, context }) => {
   await page.goto(origin); await connected(page); await createNote(page, 'Flight plan');
   await signal(page, { type: 'updates', pending: 'b'.repeat(64) });
