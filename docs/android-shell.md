@@ -6,7 +6,9 @@ Status: implemented; validation results below. No production deployment or real-
 
 Stow's Android application retains the existing web editor. Opening an initialized account displays the installed web release and locally saved notes without waiting for authentication, a version check, or a network response. Google Play services, Firebase, and third-party push infrastructure are not runtime dependencies.
 
-Android schedules a bounded refresh every 15 minutes with a connected-network constraint. Network availability requests another refresh when the last successful refresh is at least five minutes old. Requests coalesce; interrupted work retries with backoff. Registration survives process death and is restored after reboot. These are opportunities, not deadlines: Doze and Android power policy can defer work.
+Android schedules a bounded refresh every 15 minutes with a connected-network constraint. Network availability requests another refresh when the last successful refresh is at least five minutes old. Requests coalesce. Each polling opportunity completes even if its fetch fails; the failure remains in diagnostics and does not advance the last-success timestamp. The next periodic poll retains its normal eligibility instead of exponentially backing off for hours. Android can still stop or defer work when constraints change. Registration survives process death and is restored after reboot. These are opportunities, not deadlines: Doze and Android power policy can defer work.
+
+Stow does not predict maintenance windows or keep a timer running through sleep. WorkManager/JobScheduler retains eligible network-constrained work and Android dispatches it during allowed windows. A version 2 APK replaces the version 1 job registrations so an already-persisted long retry delay cannot survive the update; vaults and pending edits are unaffected.
 
 The foreground app records native registration and starts uploading diagnostics even before its first worker run. Server `lastForegroundAt` is evidence of an app check-in; `lastBackgroundAt` and wake/success events describe actual worker activity. A foreground registration is not evidence that Android ran a background refresh.
 
@@ -37,14 +39,15 @@ This first shell reuses the existing background refresh scope: download the priv
 | Offline launch | Cached content appears with server unreachable or hanging; no network deadline controls display. |
 | Connection loss | Disconnect before handshake, mid-transfer, and during retries; no false success, partial durable update, or lost pending local edits. |
 | Reconnection | Wi-Fi/mobile availability after process death requests work; repeated network events coalesce and respect recent-success throttling. |
-| Doze | Observe deferral in forced Doze; verify recovery at an allowed opportunity/exit. Record separately any forced JobScheduler executions and natural scheduling observations. |
+| Doze | Observe deferral in forced Doze; advance the idle controller into maintenance with the screen still off and verify a durable download. Disconnect before waking and opening Stow to read it. No refresh broadcast or forced JobScheduler execution may cause that download. Record this controlled window separately from natural scheduling observations. |
+| Failed polling | A failed periodic fetch retains its failure and last-success timestamp, resets its WorkManager attempt count, and is next eligible within the ordinary interval. APK upgrade retires old jobs carrying hours-long retry delays. |
 | Concurrent editing | Background download and foreground local writes converge; local pending edits survive interruption/restart. |
 | Web updates | Complete release installs; missing/corrupt assets, HTML login responses, redirects, interrupted downloads, and incompatible shell API do not activate. |
 | Update activation | Restart works offline; no automatic restart during edit/composition/drag/modal/local save; view/filter/scroll restored. |
 | Update/process races | Terminate during staging and after publication; installed release is complete. Existing page and worker continue loading assets from their pinned release. |
 | APK updates | Advertise only valid metadata; verify checksum/package/signing identity; cancellation retains current app and data. |
 | Security boundary | External navigation has no native bridge; unsupported origin/protocol and untrusted frame calls rejected. |
-| Diagnostics | Trigger, start, finish/failure/cancellation and build stamps persist through process death and upload without note content or credentials. |
+| Diagnostics | Trigger, start, finish/failure/cancellation and build stamps persist through process death and upload without note content or credentials. Starts and outcomes include charging, screen/idle state, power restrictions, app standby bucket, Data Saver, and network capabilities/blocking state. Evidence remains valid JSON within the existing message length limit. |
 
 ## Validation and handoff
 
@@ -123,3 +126,11 @@ The test environment is an isolated Android 16/API 36 emulator with WebView 133.
 The final deterministic run passed in `build/android-shell/trial-IOT0eT/`, including uploaded diagnostic stamps and the native image picker. Full-check output is `build/android-shell/logs/full-check-release.log`; final Android output is `build/android-shell/logs/verified-emulator.log`. Logs, screenshots, and generated artifacts are disposable.
 
 The remaining rollout work is operator configuration: publish a permanently signed APK and its metadata, deploy the server/web changes, and exempt `/native/` from interactive proxy login as described above. Real-device trials then measure scheduling and battery behavior on the intended phone/tablet; emulation cannot establish those manufacturer-specific outcomes.
+
+## Overnight diagnostics and polling correction (2026-11-05)
+
+Version 2 records compact JSON after ` | state=` in native diagnostic messages, using the existing authenticated upload and storage path. Start, success, failure, timeout, and stop events capture charging, interactivity, deep/light idle, power saving, Low Power Standby, battery exemptions, background restrictions, standby bucket, and Data Saver. Network evidence includes presence, validation, metering, suspension, Wi-Fi/cellular/VPN transport flags, Private DNS activity, and the default-network callback's blocked status. `null` means not observed or unavailable on that Android API, never permission granted. The network snapshot excludes SSIDs and IP/DNS-server addresses; credentials and note content are not logged. Native exception cause classes and messages help distinguish DNS failures from HTTP or TLS errors and may identify the attempted server address. Stop reasons use Android's numeric job reason where supported.
+
+The callback lives only for a bounded worker attempt; there is no always-running observer or polling loop. The native ring retains 200 events, which enter the existing bounded JavaScript log on a subsequent worker run. Evidence may be uploaded later than it occurred: use `nativeAt` and the event's shell version, not its upload time. The message-size regression ensures the web log cannot truncate these JSON snapshots. Server retention and account binding are unchanged.
+
+The regression now injects a failed periodic request and verifies that last-success remains unchanged while the next ordinary poll is eligible within 15 minutes. Android still controls the actual execution time. The controlled Doze test advances the idle controller into maintenance, with the screen off and no app launch or forced job, and verifies a durable download plus server-received environment evidence. Network access is removed before waking the emulator to read the new note. This proves the maintenance path, not a real phone's overnight scheduling or battery cost. The earlier wake-and-recover test alone did not prove that path.

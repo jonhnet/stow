@@ -29,6 +29,9 @@ test('a reload reports cached notes appearing before the delayed session respons
   await page.goto('/?startup-profile=1');
   await expect(page.locator('.app')).toBeVisible();
   await expect(page.locator('.sync-state')).toHaveClass(/sync-online/);
+  // Connected precedes the durable initial-sync marker. Finish populating the
+  // cache before testing a reload that deliberately prevents server access.
+  await expect(page.locator('.main-content > .loading-state')).toHaveCount(0);
   let releaseSession!: () => void;
   const sessionGate = new Promise<void>(resolve => { releaseSession = resolve; });
   await page.route('**/api/session', async route => {

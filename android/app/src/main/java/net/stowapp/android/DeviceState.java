@@ -58,7 +58,7 @@ final class DeviceState {
         try {
             JSONArray existing = new JSONArray(prefs.getString("events", "[]"));
             JSONArray next = new JSONArray();
-            for (int i = Math.max(0, existing.length() - 99); i < existing.length(); i++) next.put(existing.get(i));
+            for (int i = Math.max(0, existing.length() - 199); i < existing.length(); i++) next.put(existing.get(i));
             long sequence = prefs.getLong("eventSequence", 0) + 1;
             next.put(new JSONObject().put("sequence", sequence).put("at", System.currentTimeMillis()).put("message", message)
                 .put("trigger", trigger).put("shellVersion", BuildConfig.VERSION_CODE));

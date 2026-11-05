@@ -19,6 +19,7 @@ const record = (event, detail = {}) => { const item = { at: new Date().toISOStri
 const adb = (...args) => execFileSync('adb', ['-s', values.serial, ...args], { encoding: 'utf8', timeout: 30000 }).trim();
 const quote = value => "'" + String(value).replaceAll("'", "'\\''") + "'";
 const control = (command, extras = {}) => adb('shell', `am broadcast -n ${pkg}/.EmulatorControl --es command ${quote(command)} ${Object.entries(extras).map(([k, v]) => `--es ${k} ${quote(v)}`).join(' ')}`);
+const workState = () => { control('inspect'); return JSON.parse(adb('shell', `run-as ${pkg} cat files/emulator-work.json`)); };
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 const server = spawn('../build/cargo-target/debug/stow-test-driver', ['serve'], { stdio: ['pipe', 'pipe', 'inherit'] });
 server.stdin.write(JSON.stringify({ host: '127.0.0.1', port: 0, dataDir: path.join(trial, 'data'), staticDir: path.join(trial, 'web'), password: '', authMode: 'password' }) + '\n');
@@ -196,6 +197,27 @@ try {
     await expect(page.getByRole('article', { name: 'Open note: Remote note after interrupted refresh' })).toBeVisible();
     await expect(writer.getByRole('article', { name: 'Open note: Pending offline edit' })).toBeVisible({ timeout: 20000 });
     record('foreground-reconciled-pending-edit');
+    // A failed periodic poll finishes its opportunity, retaining failure and
+    // last-success evidence, and remains eligible at the normal next interval.
+    // The test uses the production 15-minute request, not a shortened timer.
+    proxy.fault.unavailable = true;
+    const beforeFailure = workState().events.at(-1)?.sequence ?? 0;
+    control('periodic');
+    await expect.poll(() => workState().events.some(event => event.sequence > beforeFailure && event.trigger === 'periodic' && event.message.startsWith('worker refresh failed')), { timeout: 30000 }).toBe(true);
+    let failedPoll;
+    await expect.poll(() => {
+      failedPoll = workState();
+      return failedPoll.periodic.some(job => job.state === 'ENQUEUED' && job.attempt === 0 && job.nextAt > failedPoll.at);
+    }).toBe(true);
+    expect(failedPoll.lastSuccess).toBe(0);
+    const nextPoll = failedPoll.periodic.find(job => job.state === 'ENQUEUED');
+    expect(nextPoll.nextAt - failedPoll.at).toBeLessThanOrEqual(15 * 60 * 1000);
+    const failedEvidence = failedPoll.events.findLast(event => event.message.startsWith('worker refresh failed'));
+    const environment = JSON.parse(failedEvidence.message.split(' | state=')[1]);
+    expect(environment.network.blocked).toBe(false);
+    expect(environment.network.validated).toBe(true);
+    proxy.fault.unavailable = false;
+    record('failed-poll-retained-error-without-exponential-backoff', { nextDelayMs: nextPoll.nextAt - failedPoll.at, environment });
     // Schedule before killing the process. Starting it with a test broadcast
     // inside Doze would itself wake the app and bypass JobScheduler deferral.
     control('deferred');
@@ -208,11 +230,32 @@ try {
     await sleep(12000);
     expect((await diagnostics()).devices.some(d => d.events.some(e => e.kind === 'success' && !dozePrior.has(e.runId)))).toBe(false);
     record('doze-deferred-refresh');
-    adb('shell', 'dumpsys', 'deviceidle', 'unforce'); adb('shell', 'input', 'keyevent', 'KEYCODE_WAKEUP'); adb('shell', 'wm', 'dismiss-keyguard');
+    // Advance the idle controller into a maintenance window. Do not turn on
+    // the screen, start Stow, broadcast a refresh, or force a JobScheduler job.
+    expect(adb('shell', 'dumpsys', 'deviceidle', 'step', 'deep')).toContain('IDLE_MAINTENANCE');
     await expect.poll(async () => (await diagnostics()).devices.some(d => d.browser.includes('StowAndroid') && d.events.some(e => e.kind === 'success' && !dozePrior.has(e.runId))), { timeout: 120000, intervals: [1000] }).toBeTruthy();
+    expect(adb('shell', 'dumpsys', 'power')).toContain('mWakefulness=Asleep');
+    const maintenanceEvents = workState().events;
+    const savedInWindow = maintenanceEvents.findLast(event => event.message.startsWith('worker refresh saved'));
+    const windowState = JSON.parse(savedInWindow.message.split(' | state=')[1]);
+    expect(windowState.interactive).toBe(false);
+    expect(windowState.charging).toBe(false);
+    expect(windowState.idle).toBe(false); // Restrictions lifted for maintenance.
+    expect(windowState.network.blocked).toBe(false);
+    const reportedWindow = await diagnostics();
+    const reportedNative = reportedWindow.devices.filter(device => device.browser.includes('StowAndroid')).flatMap(device => device.events.filter(event => event.kind === 'native'));
+    const reportedStart = reportedNative.findLast(event => event.trigger === 'emulator-delayed' && event.message.startsWith('worker started'));
+    const reportedState = JSON.parse(reportedStart.message.split(' | state=')[1]);
+    expect(reportedState.charging).toBe(false); expect(reportedState.interactive).toBe(false);
+    const reportedFailure = reportedNative.findLast(event => event.trigger === 'periodic' && event.message.startsWith('worker refresh failed'));
+    expect(JSON.parse(reportedFailure.message.split(' | state=')[1]).network.validated).toBe(true);
+    writeFileSync(path.join(trial, 'maintenance-diagnostics.json'), JSON.stringify(reportedWindow, null, 2));
+    record('screen-off-maintenance-saved-notes', { environment: windowState });
+    // Disconnect before waking; merely catching up on wake cannot pass this.
     network(false); adb('shell', `kill -9 $(pidof ${pkg})`); adb('shell', 'am', 'start', '-W', '-n', `${pkg}/.MainActivity`); page = await attach();
+    adb('shell', 'dumpsys', 'deviceidle', 'unforce'); adb('shell', 'input', 'keyevent', 'KEYCODE_WAKEUP'); adb('shell', 'wm', 'dismiss-keyguard');
     await expect(page.getByRole('article', { name: 'Open note: Flight plan during Doze' })).toBeVisible();
-    record('doze-exit-refreshed-offline-copy');
+    record('maintenance-copy-readable-after-offline-wake');
     const original = JSON.parse(readFileSync(path.join(trial, 'web/release.json'), 'utf8'));
     const index = readFileSync(path.join(trial, 'web/index.html'), 'utf8');
     function release(number) {

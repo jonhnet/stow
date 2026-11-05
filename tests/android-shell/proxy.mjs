@@ -3,11 +3,12 @@ import { WebSocket, WebSocketServer } from 'ws';
 
 // Faults affect native requests only; the desktop continues using the real server.
 export async function faultProxy(port, backendPort) {
-  const fault = { session: false, sync: false, assets: false, hits: 0 };
+  const fault = { session: false, unavailable: false, sync: false, assets: false, hits: 0 };
   const connections = new Set();
   const server = http.createServer((request, response) => {
     if (fault.assets && (request.url.startsWith('/native/assets/') || request.url === '/native/index.html')) { fault.hits++; return; }
     if (fault.session && request.url === '/native/api/session') { fault.hits++; return; }
+    if (fault.unavailable && request.url === '/native/api/session') { fault.hits++; response.writeHead(503); response.end(); return; }
     const upstream = http.request({ host: '127.0.0.1', port: backendPort, path: request.url, method: request.method, headers: request.headers }, incoming => {
       response.writeHead(incoming.statusCode, incoming.headers); incoming.pipe(response);
     });

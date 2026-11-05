@@ -15,6 +15,7 @@ public final class RefreshWorker extends Worker {
     private final CountDownLatch finished = new CountDownLatch(1);
     private final AtomicBoolean done = new AtomicBoolean();
     private volatile WebHost host;
+    private volatile RefreshDiagnostics diagnostics;
     private volatile boolean success;
     public RefreshWorker(@NonNull Context context, @NonNull WorkerParameters params) { super(context, params); }
     @NonNull @Override public Result doWork() {
@@ -22,8 +23,9 @@ public final class RefreshWorker extends Worker {
         if (!state.paired()) return Result.failure();
         String trigger = getInputData().getString("trigger");
         if (!ACTIVE.tryLock()) { state.event(trigger, "worker: another refresh is running"); return Result.success(); }
-        state.event(trigger, "worker started: " + trigger + "; attempt=" + getRunAttemptCount());
         try {
+            diagnostics = new RefreshDiagnostics(getApplicationContext());
+            diagnostics.event(state, trigger, "worker started: " + trigger + "; attempt=" + getRunAttemptCount());
             long age = System.currentTimeMillis() - state.lastSuccess();
             if (age >= 0 && age < 5 * 60 * 1000L) { state.event(trigger, "worker: recent success; coalesced"); return Result.success(); }
             ReleaseStore releases = new ReleaseStore(getApplicationContext());
@@ -37,22 +39,36 @@ public final class RefreshWorker extends Worker {
                             if (!"refresh-complete".equals(message.optString("type"))) return;
                             success = message.optBoolean("ok");
                             if (success) state.success(message.optLong("completedAt"));
-                            state.event(trigger, success ? "worker refresh saved" : "worker refresh failed: " + message.optString("error", "Refresh did not complete"));
+                            diagnostics.event(state, trigger, success ? "worker refresh saved" : "worker refresh failed: " + message.optString("error", "Refresh did not complete"));
                             finished.countDown();
                         }
-                        public void failure(String reason) { state.event(trigger, "worker renderer failure: " + reason); finished.countDown(); }
+                        public void failure(String reason) { diagnostics.event(state, trigger, "worker renderer failure: " + reason); finished.countDown(); }
                     });
-                } catch (Exception e) { state.event(trigger, "worker launch failure: " + e.getMessage()); finished.countDown(); }
+                } catch (Exception e) { diagnostics.event(state, trigger, "worker launch failure: " + RefreshDiagnostics.failure(e)); finished.countDown(); }
             });
-            if (!finished.await(70, TimeUnit.SECONDS)) state.event(trigger, "worker refresh timed out");
+            if (!finished.await(70, TimeUnit.SECONDS)) diagnostics.event(state, trigger, "worker refresh timed out");
             done.set(true); main.post(this::destroyHost);
             // An update check cannot turn a successfully saved note into failure.
             if (!isStopped()) try { releases.check(state.origin()); state.event(trigger, "worker update check completed"); }
-            catch (Exception e) { state.event(trigger, "worker update check failed: " + e.getMessage()); }
-            return success ? Result.success() : Result.retry();
-        } catch (Exception e) { state.event(trigger, "worker failed: " + e.getMessage()); return Result.retry(); }
-        finally { done.set(true); main.post(this::destroyHost); ACTIVE.unlock(); }
+            catch (Exception e) { diagnostics.event(state, trigger, "worker update check failed: " + RefreshDiagnostics.failure(e)); }
+            // This bounded polling opportunity is finished, even if networking
+            // failed. Only the durable refresh path above records sync success.
+            // Result.retry() would back off the periodic job for hours, making
+            // it ineligible during intervening Android maintenance windows.
+            return Result.success();
+        } catch (Exception e) {
+            if (diagnostics != null) diagnostics.event(state, trigger, "worker failed: " + RefreshDiagnostics.failure(e));
+            else state.event(trigger, "worker failed: " + RefreshDiagnostics.failure(e));
+            return Result.success();
+        } finally { done.set(true); main.post(this::destroyHost); if (diagnostics != null) diagnostics.close(); ACTIVE.unlock(); }
     }
     private void destroyHost() { if (host != null) { host.destroy(); host = null; } }
-    @Override public void onStopped() { done.set(true); new DeviceState(getApplicationContext()).event(getInputData().getString("trigger"), "worker stopped by Android; saved writes retained"); finished.countDown(); main.post(this::destroyHost); }
+    @Override public void onStopped() {
+        done.set(true);
+        DeviceState state = new DeviceState(getApplicationContext());
+        String message = "worker stopped by Android; stopReason=" + (Build.VERSION.SDK_INT >= 31 ? getStopReason() : "unknown") + "; saved writes retained";
+        if (diagnostics != null) diagnostics.event(state, getInputData().getString("trigger"), message);
+        else state.event(getInputData().getString("trigger"), message);
+        finished.countDown(); main.post(this::destroyHost);
+    }
 }
