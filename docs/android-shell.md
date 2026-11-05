@@ -8,6 +8,8 @@ Stow's Android application retains the existing web editor. Opening an initializ
 
 Android schedules a bounded refresh every 15 minutes with a connected-network constraint. Network availability requests another refresh when the last successful refresh is at least five minutes old. Requests coalesce; interrupted work retries with backoff. Registration survives process death and is restored after reboot. These are opportunities, not deadlines: Doze and Android power policy can defer work.
 
+The foreground app records native registration and starts uploading diagnostics even before its first worker run. Server `lastForegroundAt` is evidence of an app check-in; `lastBackgroundAt` and wake/success events describe actual worker activity. A foreground registration is not evidence that Android ran a background refresh.
+
 The acceptance case is: edit a note on another client, leave Android Stow closed, provide an online opportunity, disconnect, then open Stow and read the new note. Merely logging a worker wake does not pass.
 
 This first shell reuses the existing background refresh scope: download the private vault's note content and metadata. Uploading local edits, fetching images, and refreshing separately stored shared-note contents happen in the foreground. It does not add a second native implementation of those synchronization paths.

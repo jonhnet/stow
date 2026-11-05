@@ -13,7 +13,13 @@ export async function registerBackgroundSync(account: Account): Promise<Backgrou
   // Select the account even when registration is denied: a prior registration
   // may still wake, and must never target a previously signed-in account.
   await rememberBackgroundAccount(account);
-  if (shellConfig()) return 'native';
+  if (shellConfig()) {
+    // This also creates the installation's diagnostic identity. Without an
+    // event, foreground uploads silently wait for the first background worker.
+    // Registration reports native mode, not evidence of a worker wake or sync.
+    await recordBackgroundEvent(account, { kind: 'registration', availability: 'native', standalone: true }, BUILD_INFO.commit);
+    return 'native';
+  }
   const standalone = matchMedia('(display-mode: standalone)').matches;
   await recordBackgroundEvent(account, { kind: 'registration-check', standalone }, BUILD_INFO.commit);
   const record = async (availability: BackgroundAvailability, permission?: PermissionState, message?: string) => {

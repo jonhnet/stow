@@ -20,6 +20,38 @@ test.beforeEach(async ({ context }, info) => {
   }, grant.account);
 });
 
+test('a fresh Android installation reports foreground presence before any background worker runs', async ({ page, context }) => {
+  await page.clock.install();
+  await page.goto(origin); await connected(page);
+  const account = await page.evaluate(() => window.__STOW_SHELL__!.account);
+  const reports = async () => {
+    const response = await context.request.get(origin + '/native/api/diagnostics/background', { headers: { 'X-Stow-Vault': account.vaultId } });
+    expect(response.status()).toBe(200);
+    return (await response.json()).devices;
+  };
+  await expect.poll(async () => (await reports()).length).toBe(1);
+  const first = (await reports())[0];
+  expect(first.lastForegroundAt).toBeGreaterThan(0);
+  expect(first.lastBackgroundAt).toBeNull();
+  expect(first.lastUploadBuild).toMatch(/^[a-f0-9]{40}$/);
+  expect(first.events.length).toBeGreaterThan(0);
+  for (const event of first.events) {
+    expect(event).toMatchObject({ kind: 'registration', availability: 'native', standalone: true, build: first.lastUploadBuild });
+  }
+  // Foreground presence must not invent a worker wake or a successful refresh.
+  await page.getByRole('button', { name: 'Settings', exact: true }).click();
+  await page.getByRole('button', { name: 'Sync diagnostics', exact: true }).click();
+  await expect(page.getByText('Background refresh: no attempts recorded on this device.', { exact: true })).toBeVisible();
+  const heartbeat = page.waitForResponse(response => response.url().endsWith('/native/api/diagnostics/background') && response.request().method() === 'POST');
+  await page.clock.fastForward(5 * 60 * 1000 + 1000);
+  const response = await heartbeat;
+  expect(response.status()).toBe(201);
+  expect(response.request().postDataJSON()).toMatchObject({ deviceId: first.deviceId, source: 'foreground', events: [] });
+  const after = (await reports())[0];
+  expect(after.lastBackgroundAt).toBeNull();
+  expect(after.events).toEqual(first.events);
+});
+
 test('the installed shell uses its update UI instead of offering an APK download in Settings', async ({ page }) => {
   let checks = 0;
   await page.route('**/native/release.json', route => { checks++; return route.fulfill({ json: { android: null } }); });
