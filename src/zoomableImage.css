@@ -1,0 +1,11 @@
+.image-zoom{display:flex;flex-direction:column;flex:1;min-height:0;min-width:0}
+.image-viewport{position:relative;flex:1;min-height:0;overflow:hidden;touch-action:none;user-select:none}
+.image-viewport:focus-visible{outline:2px solid #aeb4ba;outline-offset:-2px}
+.image-viewport.is-zoomed{cursor:grab}
+.image-viewport.is-zoomed:active{cursor:grabbing}
+.image-viewport>img{position:absolute;left:50%;top:50%;max-width:none;max-height:none;transform-origin:center;will-change:transform;-webkit-user-drag:none}
+.image-zoom-controls{display:flex;align-items:center;justify-content:center;gap:8px;flex-shrink:0;padding-top:8px}
+.image-zoom-controls button{color:#fff;touch-action:manipulation}
+.image-zoom-controls button:disabled{opacity:.35;cursor:default}
+.image-fit{font-size:13px;font-variant-numeric:tabular-nums;min-width:60px;min-height:40px;border-radius:6px}
+.image-fit:hover{background:#ffffff16}

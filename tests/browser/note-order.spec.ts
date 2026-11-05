@@ -243,7 +243,9 @@ test.describe('touch note gestures', () => {
     await page.evaluate(() => window.scrollTo(0, document.documentElement.scrollHeight));
     const checklist = card(page, 'Order note 000');
     const checkbox = checklist.getByRole('checkbox', { name: 'Keep this checkbox usable' });
-    await checkbox.scrollIntoViewIfNeeded();
+    // scrollIntoView alone can leave the checkbox behind the sticky header.
+    // Require the real touch target to be unobscured before taking coordinates.
+    await checkbox.tap({ trial: true });
     const checkBounds = (await checkbox.boundingBox())!;
     await touch('touchStart', checkBounds.x + checkBounds.width / 2, checkBounds.y + checkBounds.height / 2);
     await page.waitForTimeout(550);
@@ -255,6 +257,7 @@ test.describe('touch note gestures', () => {
     await expectCircles(page, false);
 
     const colorButton = checklist.getByRole('button', { name: 'Background color', exact: true });
+    await colorButton.tap({ trial: true });
     const colorBounds = (await colorButton.boundingBox())!;
     await touch('touchStart', colorBounds.x + colorBounds.width / 2, colorBounds.y + colorBounds.height / 2);
     await page.waitForTimeout(550);

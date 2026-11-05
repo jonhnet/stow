@@ -33,9 +33,10 @@
 .image-placeholder small{font-size:10px;text-align:center}
 .image-viewer-backdrop{position:fixed;inset:0;z-index:90;background:#151617e8;display:flex;align-items:center;justify-content:center;padding:24px}
 .image-viewer{width:min(1100px,100%);max-height:calc(100dvh - 48px);display:flex;flex-direction:column;color:#fff;min-height:140px}
-.image-viewer-heading{display:flex;gap:16px;align-items:center;justify-content:space-between;padding:8px 0;overflow-wrap:anywhere}
+.original-image-viewer{height:100%}
+.original-image-viewer>.original-image-message{flex:1}
+.image-viewer-heading{flex-shrink:0;display:flex;gap:16px;align-items:center;justify-content:space-between;padding:8px 0;overflow-wrap:anywhere}
 .image-viewer-heading .icon-button{color:#fff}
-.image-viewer>img{display:block;max-width:100%;min-height:0;object-fit:contain}
 .original-image-message{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:16px;padding:48px 24px;text-align:center;line-height:1.6}
 .original-image-message .text-button{background:#ffffff16}
 .history-heading{padding:10px 20px 14px;border-bottom:1px solid #20212416}

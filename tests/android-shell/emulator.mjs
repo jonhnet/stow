@@ -6,6 +6,7 @@ import { cpSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'nod
 import { createInterface } from 'node:readline';
 import { parseArgs } from 'node:util';
 import path from 'node:path';
+import sharp from 'sharp';
 import { faultProxy } from './proxy.mjs';
 
 const { values } = parseArgs({ options: { serial: { type: 'string', default: 'emulator-5580' }, observe: { type: 'string', default: '0' } } });
@@ -23,7 +24,9 @@ const server = spawn('../build/cargo-target/debug/stow-test-driver', ['serve'], 
 server.stdin.write(JSON.stringify({ host: '127.0.0.1', port: 0, dataDir: path.join(trial, 'data'), staticDir: path.join(trial, 'web'), password: '', authMode: 'password' }) + '\n');
 const lines = createInterface({ input: server.stdout });
 const address = await new Promise((resolve, reject) => { lines.once('line', line => resolve(JSON.parse(line))); server.once('exit', code => reject(new Error(`Server exited ${code}`))); });
-const port = 4276; const proxy = await faultProxy(port, address.port); const origin = `http://localhost:${port}`;
+// Use the forwarded loopback address directly: Android can cache a failed
+// localhost lookup while its radios are off, even after the forwarding returns.
+const port = 4276; const proxy = await faultProxy(port, address.port); const origin = `http://127.0.0.1:${port}`;
 
 function network(online) {
   adb('shell', 'svc', 'wifi', online ? 'enable' : 'disable'); adb('shell', 'svc', 'data', online ? 'enable' : 'disable');
@@ -48,10 +51,10 @@ function network(online) {
       adb('shell', 'input', 'tap', String(Math.floor((bounds[0] + bounds[2]) / 2)), String(Math.floor((bounds[1] + bounds[3]) / 2)));
     }
 let remote, android;
-// The Google assistant launches a repair/settings activity when Play services is
-// disabled, stealing real touch events after reboot. Disable that companion too
-// so this Google-API image is an isolated no-Play-services test environment.
-const disabledPackages = ['com.google.android.gms', 'com.google.android.googlequicksearchbox']
+// These Google companion apps launch Play-services repair activities or
+// notifications after reboot, stealing real touch events. Disable them along
+// with Play services in this isolated test; restore their original state below.
+const disabledPackages = ['com.google.android.gms', 'com.google.android.googlequicksearchbox', 'com.google.android.apps.messaging', 'com.google.android.apps.wellbeing']
   .filter(name => adb('shell', 'pm', 'list', 'packages', '-e', name).includes(`package:${name}`));
 async function attach() {
   android = (await _android.devices({ omitDriverInstall: true })).find(device => device.serial() === values.serial);
@@ -334,7 +337,8 @@ try {
     // URIs must reach the WebView and the ordinary image upload path.
     network(true);
     const imageName = 'stow-shell-image.png';
-    writeFileSync(path.join(trial, imageName), Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAACXBIWXMAAAPoAAAD6AG1e1JrAAAADUlEQVQImWP4////fwAJ+wP9CNHoHgAAAABJRU5ErkJggg==', 'base64'));
+    const bars = Array.from({ length: 70 }, (_, i) => `<rect x="${300 + i * 17}" y="450" width="${4 + i % 3}" height="300"/>`).join('');
+    writeFileSync(path.join(trial, imageName), await sharp(Buffer.from(`<svg xmlns="http://www.w3.org/2000/svg" width="1800" height="1200"><rect width="1800" height="1200" fill="white"/>${bars}</svg>`)).png().toBuffer());
     adb('push', path.join(trial, imageName), `/sdcard/Download/${imageName}`);
     adb('shell', 'am', 'broadcast', '-a', 'android.intent.action.MEDIA_SCANNER_SCAN_FILE', '-d', `file:///sdcard/Download/${imageName}`);
     await page.getByRole('article', { name: 'Open note: After explicit force stop' }).click();
@@ -345,6 +349,32 @@ try {
     await nativeButton(imageName);
     expect((await uploaded).status()).toBe(204);
     await expect(page.getByRole('dialog', { name: 'Edit note', exact: true }).getByRole('img', { name: imageName, exact: true })).toBeVisible();
+    await page.getByRole('button', { name: `Open original: ${imageName}`, exact: true }).click();
+    const imageViewer = page.getByRole('dialog', { name: `Original image: ${imageName}`, exact: true });
+    const originalImage = imageViewer.getByRole('img', { name: imageName, exact: true });
+    await expect(originalImage).toBeVisible();
+    const imageViewport = await imageViewer.getByRole('region', { name: 'Zoomable image' }).boundingBox();
+    const fitted = await originalImage.boundingBox();
+    const cx = imageViewport.x + imageViewport.width / 2, cy = imageViewport.y + imageViewport.height / 2;
+    const touchSession = await page.context().newCDPSession(page);
+    const touch = (type, touchPoints) => touchSession.send('Input.dispatchTouchEvent', { type, touchPoints });
+    const fingers = radius => [{ id: 1, x: cx - radius, y: cy }, { id: 2, x: cx + radius, y: cy }];
+    await touch('touchStart', fingers(30));
+    for (const radius of [45, 60, 90, 120]) await touch('touchMove', fingers(radius));
+    await touch('touchEnd', []);
+    await expect(imageViewer.getByRole('button', { name: 'Fit image' })).toHaveText('400%');
+    expect((await originalImage.boundingBox()).width / fitted.width).toBeCloseTo(4, 1);
+    const enlarged = await originalImage.boundingBox();
+    await touch('touchStart', [{ id: 3, x: cx, y: cy }]);
+    await touch('touchMove', [{ id: 3, x: cx - 40, y: cy }]);
+    await touch('touchEnd', []);
+    await expect.poll(async () => (await originalImage.boundingBox()).x - enlarged.x).toBeCloseTo(-40, 0);
+    expect(await page.evaluate(() => visualViewport.scale)).toBe(1);
+    writeFileSync(path.join(trial, 'image-zoom.png'), execFileSync('adb', ['-s', values.serial, 'exec-out', 'screencap', '-p']));
+    await imageViewer.getByRole('button', { name: 'Fit image' }).click();
+    await expect(imageViewer.getByRole('button', { name: 'Fit image' })).toHaveText('100%');
+    await imageViewer.getByRole('button', { name: 'Close image' }).click();
+    record('native-original-image-pinched-and-panned');
     await page.getByRole('button', { name: 'Close', exact: true }).click();
     adb('shell', 'rm', `/sdcard/Download/${imageName}`);
     record('native-file-picker-uploaded-image');

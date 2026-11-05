@@ -4,6 +4,7 @@ import { Download, File, ImagePlus, LoaderCircle, X } from 'lucide-react';
 import { store, useStow } from './core/store';
 import { isImageAttachment } from './core/images';
 import type { Attachment } from './core/types';
+import ZoomableImage from './ZoomableImage';
 
 type Lease = { url: string; release: () => void };
 
@@ -41,16 +42,16 @@ function OriginalAttachment({ attachment, onClose }: { attachment: Attachment; o
     event.stopPropagation();
     if (event.key === 'Escape') { event.preventDefault(); onClose(); }
     if (event.key === 'Tab') {
-      const buttons = [...dialog.current!.querySelectorAll<HTMLElement>('button, a[href]')];
+      const buttons = [...dialog.current!.querySelectorAll<HTMLElement>('button:not(:disabled), a[href], [tabindex="0"]')];
       const first = buttons[0], last = buttons[buttons.length - 1];
       if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus(); }
       else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
     }
   };
   return createPortal(<div className="image-viewer-backdrop" onClick={event => { event.stopPropagation(); if (event.target === event.currentTarget) onClose(); }} onPointerDown={event => event.stopPropagation()}>
-    <div className={`image-viewer${image ? '' : 'attachment-viewer'}`} role="dialog" aria-modal="true" aria-label={`${image ? 'Original image' : 'Attachment'}: ${attachment.name}`} ref={dialog} onKeyDown={keyDown}>
+    <div className={`image-viewer${image ? ' original-image-viewer' : ' attachment-viewer'}`} role="dialog" aria-modal="true" aria-label={`${image ? 'Original image' : 'Attachment'}: ${attachment.name}`} ref={dialog} onKeyDown={keyDown}>
       <div className="image-viewer-heading"><span>{attachment.name}</span><button className="icon-button" aria-label={image ? 'Close image' : 'Close attachment'} onClick={onClose}><X size={22} /></button></div>
-      {url ? image ? <img src={url} alt={attachment.name} /> : <div className="original-image-message"><File size={36} /><p>{fileDetails(attachment)}</p><p>Download this file to open it in an app that supports its format.</p><a className="attachment-download" href={url} download={attachment.name}><Download size={18} />Download {attachment.name}</a></div> : message ? <div className="original-image-message"><p role="status">{message}</p><button className="text-button" onClick={() => setAttempt(value => value + 1)}>Try again</button></div> : <div className="original-image-message" role="status"><LoaderCircle className="spinning" size={24} />Opening original…</div>}
+      {url ? image ? <ZoomableImage key={attachment.hash} src={url} alt={attachment.name} /> : <div className="original-image-message"><File size={36} /><p>{fileDetails(attachment)}</p><p>Download this file to open it in an app that supports its format.</p><a className="attachment-download" href={url} download={attachment.name}><Download size={18} />Download {attachment.name}</a></div> : message ? <div className="original-image-message"><p role="status">{message}</p><button className="text-button" onClick={() => setAttempt(value => value + 1)}>Try again</button></div> : <div className="original-image-message" role="status"><LoaderCircle className="spinning" size={24} />Opening original…</div>}
     </div>
   </div>, document.body);
 }
