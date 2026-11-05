@@ -410,6 +410,52 @@ async fn android_publication_survives_web_replacement_without_exposing_other_dat
     let manifest = request(&s, "GET", "/native/release.json", &headers, vec![]).await;
     assert_eq!(manifest.json()["release"], "second");
     assert_eq!(manifest.json()["android"], metadata);
+    // Settings uses the API route allowed by existing installed WebViews.
+    // It returns the same fresh publication, with normal browser/device auth.
+    let verifier = "f".repeat(64);
+    let pairing = json_request(&s, "POST", "/native/device/start", &headers,
+        json!({"name":"Settings test","challenge":hex::encode(Sha256::digest(verifier.as_bytes()))})).await.json();
+    assert_eq!(
+        json_request(
+            &s,
+            "POST",
+            "/api/devices/approve",
+            &auth("alice", None),
+            json!({"requestId":pairing["requestId"],"code":pairing["code"]})
+        )
+        .await
+        .status,
+        200
+    );
+    let grant = json_request(
+        &s,
+        "POST",
+        "/native/device/token",
+        &headers,
+        json!({"requestId":pairing["requestId"],"verifier":verifier}),
+    )
+    .await
+    .json();
+    let mut native = HeaderMap::new();
+    native.insert(
+        "authorization",
+        format!("StowDevice {}", string(&grant["token"]))
+            .parse()
+            .unwrap(),
+    );
+    for (path, credentials) in [
+        ("/api/release", auth("alice", None)),
+        ("/native/api/release", native),
+    ] {
+        let checked = request(&s, "GET", path, &credentials, vec![]).await;
+        assert_eq!(checked.status, 200);
+        assert_eq!(checked.json(), manifest.json());
+        assert_eq!(checked.headers["cache-control"], "no-store");
+        assert_eq!(request(&s, "GET", path, &headers, vec![]).await.status, 401);
+        let mut foreign = credentials;
+        foreign.insert("origin", "https://foreign.invalid".parse().unwrap());
+        assert_eq!(request(&s, "GET", path, &foreign, vec![]).await.status, 403);
+    }
     assert_eq!(
         request(&s, "GET", "/native/android/stow-2.apk", &headers, vec![])
             .await

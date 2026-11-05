@@ -13,7 +13,7 @@ test.beforeEach(async ({ context }, info) => {
 test('Settings discovers and downloads the published APK without leaving the notes', async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
   let checks = 0;
-  page.on('request', request => { if (new URL(request.url()).pathname === '/native/release.json') checks++; });
+  page.on('request', request => { if (new URL(request.url()).pathname === '/api/release') checks++; });
   await page.goto(origin); await connected(page); await createNote(page, 'Keep this note open');
   expect(checks).toBe(0);
   await page.getByRole('button', { name: 'Settings', exact: true }).click();
@@ -34,9 +34,9 @@ test('Settings discovers and downloads the published APK without leaving the not
 
 test('an unpublished APK appears after publication when Settings is reopened', async ({ page }) => {
   let published = false;
-  await page.route('**/native/release.json', route => route.fulfill({ json: published ? release : { android: null } }));
+  await page.route('**/api/release', route => route.fulfill({ json: published ? release : { android: null } }));
   await page.goto(origin); await connected(page);
-  const checked = page.waitForResponse('**/native/release.json');
+  const checked = page.waitForResponse('**/api/release');
   await page.getByRole('button', { name: 'Settings', exact: true }).click();
   await checked;
   await expect(page.getByRole('link', { name: 'Get Android app', exact: true })).toHaveCount(0);
@@ -47,21 +47,21 @@ test('an unpublished APK appears after publication when Settings is reopened', a
 });
 
 test('an unavailable or invalid download does not interrupt notes and can be checked again', async ({ page }) => {
-  await page.route('**/native/release.json', route => route.fulfill({ json: { android: { ...release.android, url: 'https://other.example/app.apk' } } }));
+  await page.route('**/api/release', route => route.fulfill({ json: { android: { ...release.android, url: 'https://other.example/app.apk' } } }));
   await page.goto(origin); await connected(page);
   const invalid = page.waitForEvent('console', message => message.text().includes('Android download unavailable:'));
   await page.getByRole('button', { name: 'Settings', exact: true }).click();
   await invalid;
   await expect(page.getByRole('link', { name: 'Get Android app', exact: true })).toHaveCount(0);
   await page.keyboard.press('Escape');
-  await page.route('**/native/release.json', route => route.abort());
+  await page.route('**/api/release', route => route.abort());
   const unavailable = page.waitForEvent('console', message => message.text().includes('Android download unavailable:'));
   await page.getByRole('button', { name: 'Settings', exact: true }).click();
   await unavailable;
   await page.keyboard.press('Escape');
   await createNote(page, 'Still editable');
   await expect(card(page, 'Still editable')).toBeVisible();
-  await page.route('**/native/release.json', route => route.fulfill({ json: release }));
+  await page.route('**/api/release', route => route.fulfill({ json: release }));
   await page.getByRole('button', { name: 'Settings', exact: true }).click();
   await expect(page.getByRole('link', { name: 'Get Android app', exact: true })).toBeVisible();
 });

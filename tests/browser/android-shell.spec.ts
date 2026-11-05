@@ -7,6 +7,8 @@ async function signal(page: Page, message: object) {
   await page.evaluate(message => window.dispatchEvent(new CustomEvent('stow-shell', { detail: message })), message);
 }
 const activations = (page: Page) => page.evaluate(() => (window as any).shellMessages.filter((m: any) => m.type === 'activate'));
+const installs = (page: Page) => page.evaluate(() => (window as any).shellMessages.filter((m: any) => m.type === 'update-apk'));
+const androidRelease = { version: 2, minSdk: 28, url: '/native/android/stow-2-test.apk', sha256: 'c'.repeat(64) };
 
 test.beforeEach(async ({ context }, info) => {
   await context.addCookies([{ name: 'stow_test_user', value: `shell-${info.testId}`, url: origin }]);
@@ -52,14 +54,15 @@ test('a fresh Android installation reports foreground presence before any backgr
   expect(after.events).toEqual(first.events);
 });
 
-test('the installed shell uses its update UI instead of offering an APK download in Settings', async ({ page }) => {
+test('Android Settings shows an unpublished release explicitly and diagnostics still blocks restarts', async ({ page }) => {
   let checks = 0;
-  await page.route('**/native/release.json', route => { checks++; return route.fulfill({ json: { android: null } }); });
+  await page.route('**/native/api/release', route => { checks++; return route.fulfill({ json: { android: null } }); });
   await page.goto(origin); await connected(page);
   await page.getByRole('button', { name: 'Settings', exact: true }).click();
   await expect(page.getByRole('button', { name: 'Connected Android devices', exact: true })).toBeVisible();
   await expect(page.getByRole('link', { name: 'Get Android app', exact: true })).toHaveCount(0);
-  expect(checks).toBe(0);
+  await expect(page.getByRole('button', { name: 'No Android app release published', exact: true })).toBeDisabled();
+  expect(checks).toBe(1);
   await page.getByRole('button', { name: 'Sync diagnostics', exact: true }).click();
   await signal(page, { type: 'updates', pending: 'b'.repeat(64) });
   await signal(page, { type: 'hidden' });
@@ -67,6 +70,64 @@ test('the installed shell uses its update UI instead of offering an APK download
   await expect(page.getByRole('button', { name: 'Restart', exact: true })).toBeDisabled();
   await page.getByRole('button', { name: 'Close sync diagnostics', exact: true }).click();
   await expect(page.getByRole('button', { name: 'Settings', exact: true })).toBeFocused();
+});
+
+test('Android Settings checks the published version on each opening and installs through the native barrier', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  let published = { ...androidRelease, version: 1 };
+  await page.route('**/native/api/release', route => route.fulfill({ json: { android: published } }));
+  await page.goto(origin); await connected(page); await createNote(page, 'Keep my notes');
+  await page.getByRole('button', { name: 'Settings', exact: true }).click();
+  await expect(page.getByRole('button', { name: 'Android app is up-to-date', exact: true })).toBeDisabled();
+  await page.keyboard.press('Escape');
+  published = androidRelease;
+  await page.getByRole('searchbox').fill('Keep');
+  await page.getByRole('button', { name: 'Settings', exact: true }).click();
+  const update = page.getByRole('button', { name: 'Get updated Android app', exact: true });
+  await expect(update).toBeEnabled();
+  const bounds = (await update.boundingBox())!;
+  expect(bounds.x).toBeGreaterThanOrEqual(0); expect(bounds.x + bounds.width).toBeLessThanOrEqual(390);
+  await update.click();
+  await expect(page.locator('.settings-menu')).toHaveCount(0);
+  await expect(page.getByText('Checking Android update…', { exact: true })).toBeVisible();
+  await expect.poll(() => page.evaluate(() => (window as any).shellMessages.some((m: any) => m.type === 'check-updates'))).toBe(true);
+  await signal(page, { type: 'updates', android: { ...androidRelease, sha256: 'd'.repeat(64) } });
+  expect(await installs(page)).toEqual([]); // Cached metadata cannot select another APK.
+  await signal(page, { type: 'updates', android: androidRelease });
+  await expect.poll(() => installs(page)).toEqual([{ type: 'update-apk', automatic: false }]);
+  const saved = await page.evaluate(() => JSON.parse(localStorage.getItem(`stow-shell-view:${window.__STOW_SHELL__!.account.vaultId}`)!));
+  expect(saved.search).toBe('Keep');
+  await expect(card(page, 'Keep my notes')).toBeVisible();
+});
+
+test('Android Settings never calls a failed release check up-to-date and can retry', async ({ page }) => {
+  await page.route('**/native/api/release', route => route.abort());
+  await page.goto(origin); await connected(page);
+  await page.getByRole('button', { name: 'Settings', exact: true }).click();
+  const retry = page.getByRole('button', { name: 'Check for Android updates', exact: true });
+  await expect(retry).toBeEnabled();
+  await expect(page.getByRole('button', { name: 'Android app is up-to-date', exact: true })).toHaveCount(0);
+  await page.route('**/native/api/release', route => route.fulfill({ json: { android: { ...androidRelease, version: 1 } } }));
+  await retry.click();
+  await expect(page.getByRole('button', { name: 'Android app is up-to-date', exact: true })).toBeDisabled();
+});
+
+test('editing while the native release check is pending cancels installation', async ({ page }) => {
+  await page.route('**/native/api/release', route => route.fulfill({ json: { android: androidRelease } }));
+  await page.goto(origin); await connected(page); await createNote(page, 'Before install');
+  await page.getByRole('button', { name: 'Settings', exact: true }).click();
+  await page.getByRole('button', { name: 'Get updated Android app', exact: true }).click();
+  await expect(page.getByText('Checking Android update…', { exact: true })).toBeVisible();
+  await card(page, 'Before install').click();
+  const body = page.getByRole('textbox', { name: 'Note text', exact: true }); await body.focus(); await body.fill('Keep typing');
+  await signal(page, { type: 'updates', android: androidRelease });
+  await expect(page.getByText('Checking Android update…', { exact: true })).toHaveCount(0);
+  expect(await installs(page)).toEqual([]);
+  await expect(body).toHaveValue('Keep typing');
+  await page.getByRole('button', { name: 'Close', exact: true }).click();
+  await page.getByRole('button', { name: 'Settings', exact: true }).click();
+  await page.getByRole('button', { name: 'Get updated Android app', exact: true }).click();
+  await expect.poll(() => installs(page)).toEqual([{ type: 'update-apk', automatic: false }]);
 });
 
 test('updates wait for editor, composition, pointer, selection and modal to finish; restart saves and restores the filtered view', async ({ page, context }) => {

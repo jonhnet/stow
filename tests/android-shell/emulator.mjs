@@ -244,7 +244,10 @@ try {
     expect(windowState.network.blocked).toBe(false);
     const reportedWindow = await diagnostics();
     const reportedNative = reportedWindow.devices.filter(device => device.browser.includes('StowAndroid')).flatMap(device => device.events.filter(event => event.kind === 'native'));
-    const reportedStart = reportedNative.findLast(event => event.trigger === 'emulator-delayed' && event.message.startsWith('worker started'));
+    // Opening maintenance can also release a pending network callback. Either
+    // eligible job may win the worker lock; inspect the one that actually saved.
+    const reportedStart = reportedNative.findLast(event => event.trigger === savedInWindow.trigger && event.nativeAt <= savedInWindow.at && event.message.startsWith('worker started'));
+    expect(reportedStart, 'The maintenance worker start must reach server diagnostics').toBeTruthy();
     const reportedState = JSON.parse(reportedStart.message.split(' | state=')[1]);
     expect(reportedState.charging).toBe(false); expect(reportedState.interactive).toBe(false);
     const reportedFailure = reportedNative.findLast(event => event.trigger === 'periodic' && event.message.startsWith('worker refresh failed'));
@@ -312,14 +315,16 @@ try {
     const manifest = JSON.parse(readFileSync(path.join(trial, 'web/release.json'), 'utf8'));
     manifest.android = androidRelease;
     writeFileSync(path.join(trial, 'data/android-release/release.json'), JSON.stringify(manifest.android));
-    network(true); await page.evaluate(() => window.StowShell.postMessage(JSON.stringify({ type: 'check-updates' })));
-    await expect(page.getByRole('button', { name: 'Update', exact: true })).toBeVisible({ timeout: 30000 });
+    network(true);
+    await page.getByRole('button', { name: 'Settings', exact: true }).click();
+    await expect(page.getByRole('button', { name: 'Get updated Android app', exact: true })).toBeEnabled();
     adb('shell', 'appops', 'set', pkg, 'REQUEST_INSTALL_PACKAGES', 'allow');
-    await page.getByRole('button', { name: 'Update', exact: true }).click(); await nativeButton('Cancel');
+    await page.getByRole('button', { name: 'Get updated Android app', exact: true }).click(); await nativeButton('Cancel');
     expect(adb('shell', 'dumpsys', 'package', pkg)).toContain('versionCode=1 ');
     record('apk-cancel-kept-installed-app');
     adb('shell', 'am', 'start', '-W', '-n', `${pkg}/.MainActivity`);
-    await page.getByRole('button', { name: 'Update', exact: true }).click(); await nativeButton('Update');
+    await page.getByRole('button', { name: 'Settings', exact: true }).click();
+    await page.getByRole('button', { name: 'Get updated Android app', exact: true }).click(); await nativeButton('Update');
     await expect.poll(() => adb('shell', 'dumpsys', 'package', pkg), { timeout: 30000 }).toContain('versionCode=2 ');
     await nativeButton('Open');
     await android.close(); android = undefined;
@@ -327,6 +332,14 @@ try {
     expect(await page.evaluate(() => window.__STOW_SHELL__.version)).toBe(2);
     await expect(page.getByRole('article', { name: 'Open note: Flight plan during Doze' })).toBeVisible();
     record('signed-apk-update-preserved-offline-vault');
+    await page.getByRole('button', { name: 'Settings', exact: true }).click();
+    await expect(page.getByRole('button', { name: 'Check for Android updates', exact: true })).toBeEnabled();
+    network(true);
+    await page.getByRole('button', { name: 'Check for Android updates', exact: true }).click();
+    await expect(page.getByRole('button', { name: 'Android app is up-to-date', exact: true })).toBeDisabled();
+    await page.getByRole('button', { name: 'Settings', exact: true }).click();
+    record('android-settings-update-status-verified');
+    network(false);
     // Reboot is different from killing a process: registrations must be restored
     // by the boot receiver, and an offline launch must still read the cache.
     await android.close(); android = undefined; adb('reboot');

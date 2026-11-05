@@ -1044,6 +1044,12 @@ async fn handle_http(
         return Ok(response);
     }
     let principal = state.authenticate(&headers)?;
+    // The installed WebView permits API requests but pins all other resources
+    // to its local release. Settings needs fresh publication metadata through
+    // this authenticated API; native bootstrap still uses /native/release.json.
+    if path == "/api/release" && read {
+        return android_releases::manifest(&state).await;
+    }
     if principal.vault_id.starts_with("share_")
         && (path.starts_with("/api/history-retention") || path == "/api/storage")
     {

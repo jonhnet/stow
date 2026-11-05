@@ -1,6 +1,7 @@
 import { cachedAccount, rememberAccount, parseAccount, type Account } from './account';
 
 export interface ShellConfig { api: 1; version: number; release: string; account: Account; trigger?: string; nativeEvents?: Array<{ sequence: number; at: number; message: string; trigger: string; shellVersion: number }> }
+export interface AndroidRelease { version: number; minSdk: number; url: string; sha256: string }
 declare global {
   interface Window {
     __STOW_SHELL__?: ShellConfig;

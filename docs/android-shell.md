@@ -12,6 +12,8 @@ Stow does not predict maintenance windows or keep a timer running through sleep.
 
 The foreground app records native registration and starts uploading diagnostics even before its first worker run. Server `lastForegroundAt` is evidence of an app check-in; `lastBackgroundAt` and wake/success events describe actual worker activity. A foreground registration is not evidence that Android ran a background refresh.
 
+Settings includes an Android update entry inside the installed app. Opening Settings checks the published manifest: a newer APK offers **Get updated Android app**, and an installed version at least as recent shows a disabled **Android app is up-to-date**. Failed/offline checks offer a retry instead of claiming the app is current. The update uses the shell's existing verified installer and the same save/view-restoration barrier as the update banner. If the native release selection is stale, it must acquire the advertised APK metadata before installation; starting another interaction while it checks cancels installation. This menu is delivered with the web UI and works with the existing shell API.
+
 The acceptance case is: edit a note on another client, leave Android Stow closed, provide an online opportunity, disconnect, then open Stow and read the new note. Merely logging a worker wake does not pass.
 
 This first shell reuses the existing background refresh scope: download the private vault's note content and metadata. Uploading local edits, fetching images, and refreshing separately stored shared-note contents happen in the foreground. It does not add a second native implementation of those synchronization paths.
