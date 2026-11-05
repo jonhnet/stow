@@ -156,7 +156,6 @@
 @media(max-width:620px){.server-notice{max-width:calc(100vw - 24px)}}
 
 .shared-participants{display:flex;align-items:center;gap:6px;font-size:12px;margin:8px 0;color:#5f6368;flex-wrap:wrap}.participant-avatar{display:inline-flex;width:28px;height:28px;align-items:center;justify-content:center;border-radius:50%;background:#e8eaed;color:#202124;font-size:11px}.share-dialog::backdrop{background:#0005}.share-dialog{border:0;background:white;color:#202124;padding:24px;border-radius:12px;max-width:480px;width:calc(100vw - 32px);box-shadow:0 8px 40px #0004}.share-dialog input{width:100%;margin:8px 0}.share-dialog button,.shared-page-notice button{margin:8px;padding:8px 12px}.shared-page-notice{padding:16px;border:1px solid #dadce0;border-radius:8px;margin-bottom:16px}
-.last-sync { display: block; margin-top: 4px; color: #5f6368; font-size: 12px; }
 
 .sign-in-button{display:inline-block;background:#fbbc04;color:#202124;font-weight:600;text-decoration:none;padding:12px 24px;border-radius:8px;margin:8px 0}.sign-in-button:focus-visible{outline:3px solid #202124;outline-offset:3px}.sign-in-notice{padding:12px 16px;border:1px solid #fbbc04;border-radius:8px;margin-bottom:16px}.sign-in-notice p{margin:0}
 

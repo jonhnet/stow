@@ -345,12 +345,14 @@ test('a terminal sync failure keeps the server message visible without requestin
   await expect(card(page)).toContainText('Baseline');
 });
 
-test('settings identifies the running bundle with commit hash and commit date', async ({ page }) => {
+test('settings identifies the running bundle and puts its commit date in diagnostics', async ({ page }) => {
   await page.goto(origin); await connected(page);
   await page.getByRole('button', { name: 'Settings', exact: true }).click();
   const row = page.getByLabel('Running build'); const version = buildInfo(sourceDir);
   await expect(row).toContainText(version.commit!.slice(0, 10));
   await expect(row.locator('code')).toHaveAttribute('title', version.commit!);
+  await expect(row.locator('time')).toHaveCount(0);
+  await page.getByRole('button', { name: 'Sync diagnostics', exact: true }).click();
   await expect(row.locator('time')).toHaveAttribute('datetime', version.committedAt!);
   await expect(row.getByRole('button')).toHaveCount(0);
 });

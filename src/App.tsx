@@ -1,4 +1,3 @@
-import type { BackgroundResult } from './core/background-state';
 import { shellConfig, shellMessage } from './core/shell';
 import { restoredShellView, useRestoreShellScroll, useShellUpdates } from './ShellUpdates';
 import { SharedParticipants, ShareNote } from './SharedNote';
@@ -37,6 +36,7 @@ import { IS_DEMO, DEMO_IMAGE_MESSAGE } from './runtime';
 import ServerNotice from './ServerNotice';
 import BuildVersion from './BuildVersion';
 import AndroidDownload from './AndroidDownload';
+import SyncDiagnostics from './SyncDiagnostics';
 import { installStow, useInstallable } from './install';
 import { copyNotes, downloadNotes } from './noteExport';
 import { useCurrentSearch } from './useCurrentSearch';
@@ -298,23 +298,6 @@ function NoteEditor({ note: savedNote, initial, onCreated, labels, onClose: clos
   </div>;
 }
 
-function BackgroundRefreshDetails() {
-  const [result, setResult] = useState<BackgroundResult | null>();
-  const [error, setError] = useState(false);
-  useEffect(() => {
-    let active = true;
-    void store.getBackgroundResult().then(value => { if (active) setResult(value); }, () => { if (active) setError(true); });
-    return () => { active = false; };
-  }, []);
-  if (error) return <small className="last-sync">Could not read background refresh diagnostics.</small>;
-  if (result === undefined) return null;
-  return <>{result === null ? <small className="last-sync">Background refresh: no attempts recorded on this device.</small> : <><small className="last-sync">Last background attempt: {new Date(result.attemptedAt).toLocaleString()}</small>
-    <small className="last-sync">Last background success: {result.completedAt ? new Date(result.completedAt).toLocaleString() : 'none recorded'}</small>
-    {result.error ? <small className="last-sync">Last background error: {result.error}</small>
-      : result.completedAt === undefined || result.completedAt < result.attemptedAt ? <small className="last-sync">Last attempt has no recorded completion; it may still be running or have been interrupted.</small> : null}</>}
-    <button type="button" onClick={() => { void store.exportBackgroundLog().catch(() => setError(true)); }}><Download size={16} />Download background log</button></>;
-}
-
 function SignInButton() {
   if (shellConfig()) return <button onClick={() => shellMessage('sign-in')}>Sign in with browser</button>;
   return import.meta.env.VITE_STOW_LOGIN_URL
@@ -330,7 +313,7 @@ function Login({ onError, error }: { onError: (s: string) => void; error: string
 
 export default function App() {
   const installable = useInstallable();
-  const { notes, labels, status, ready, access, accessMessage, authMode, user, canReload, error, canUndo, canRedo, pending, localPending, images, syncRejection, lastSyncAt, backgroundSync, signInRequired } = useStow();
+  const { notes, labels, status, ready, access, accessMessage, authMode, user, canReload, error, canUndo, canRedo, pending, localPending, images, syncRejection, signInRequired } = useStow();
   const orderedLabels = useMemo(() => sortLabelsByRecentEdit(labels, notes), [labels, notes]);
   const [restored] = useState(restoredShellView);
   const [view, setView] = useState<View>(restored?.view ?? 'notes');
@@ -344,13 +327,14 @@ export default function App() {
   const [toast, setToast] = useState<{ message: string; kind: 'error' | 'history' | 'copy' } | null>(null);
   const [settings, setSettings] = useState(false);
   const [storageSettings, setStorageSettings] = useState(false);
+  const [syncDiagnostics, setSyncDiagnostics] = useState(false);
   const [sharingNote, setSharingNote] = useState<Note>();
   const [deletion, setDeletion] = useState<NoteDeletion | null>(null);
   const searchRef = useRef<HTMLInputElement>(null);
   const settingsRef = useRef<HTMLDivElement>(null);
   const activeNote = editing?.noteId ? notes.find(note => note.id === editing.noteId || note.sourceIds.includes(editing.noteId!)) : undefined;
   useRestoreShellScroll(ready);
-  const shellUpdates = useShellUpdates({ view, search, selectedLabel, listView }, !!editing || selected.size > 0 || settings || storageSettings || !!sharingNote || !!deletion);
+  const shellUpdates = useShellUpdates({ view, search, selectedLabel, listView }, !!editing || selected.size > 0 || settings || storageSettings || syncDiagnostics || !!sharingNote || !!deletion);
   const notify = useCallback((message: string) => setToast({ message, kind: 'error' }), []);
   const undoOrRedo = useCallback((kind: 'undo' | 'redo') => {
     if (store.getSnapshot().syncRejection?.code === 'client_update_required') return;
@@ -413,7 +397,7 @@ export default function App() {
   }, [ready, labels, selectedLabel]);
   useEffect(() => { if (toast) { const timer = setTimeout(() => setToast(null), 5000); return () => clearTimeout(timer); } }, [toast]);
   useEffect(() => { if (error) notify(error); }, [error, notify]);
-  useEffect(() => { if (access === 'locked' || access === 'blocked') { setEditing(null); setDeletion(null); setStorageSettings(false); } }, [access, setEditing]);
+  useEffect(() => { if (access === 'locked' || access === 'blocked') { setEditing(null); setDeletion(null); setStorageSettings(false); setSyncDiagnostics(false); } }, [access, setEditing]);
   useEffect(() => {
     if (syncRejection?.code === 'client_update_required') { setDeletion(null); setStorageSettings(false); }
   }, [syncRejection]);
@@ -424,7 +408,7 @@ export default function App() {
   useEffect(() => { if (IS_DEMO) return; try { localStorage.setItem('stow-list-view', String(listView)); } catch { /* Account bootstrap reports unavailable browser storage. */ } }, [listView]);
   useEffect(() => {
     const keys = (event: globalThis.KeyboardEvent) => {
-      if (access !== 'ready' || syncRejection?.code === 'client_update_required' || deletion || storageSettings) return;
+      if (access !== 'ready' || syncRejection?.code === 'client_update_required' || deletion || storageSettings || syncDiagnostics) return;
       const target = event.target as HTMLElement;
       const input = target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable;
       if (!input && event.key === '/' && !editing) { event.preventDefault(); searchRef.current?.focus(); }
@@ -440,7 +424,7 @@ export default function App() {
       if (event.key === 'Escape' && !editing) { setSelected(new Set()); setSettings(false); if (search) setSearch(''); }
     };
     document.addEventListener('keydown', keys); return () => document.removeEventListener('keydown', keys);
-  }, [editing, search, access, syncRejection, undoOrRedo, selectedNotes.length, copySelected, deletion, storageSettings]);
+  }, [editing, search, access, syncRejection, undoOrRedo, selectedNotes.length, copySelected, deletion, storageSettings, syncDiagnostics]);
   useDismissiblePopup(settings, settingsRef, restoreFocus => {
     setSettings(false);
     if (restoreFocus) settingsRef.current?.querySelector<HTMLButtonElement>('button')?.focus({ preventScroll: true });
@@ -465,7 +449,7 @@ export default function App() {
       {selected.size ? <><IconButton label="Clear selection" onClick={() => setSelected(new Set())}><X size={24} /></IconButton><span className="selection-count">{selected.size}<span className="selection-count-word"> selected</span></span><div className="selection-actions"><IconButton label="Copy selected notes" title={`Copy selected notes (${macShortcuts ? 'Cmd+C' : 'Ctrl+C'})`} aria-keyshortcuts={macShortcuts ? "Meta+c" : "Control+c"} onClick={() => void copySelected()}><Copy size={21} /></IconButton><SelectionExport onExport={exportSelected} />{selected.size > 1 && !selectedNotes.some(note => note.sharing) && view !== 'trash' && <button className="merge-button" aria-label="Merge notes" onClick={() => { const id = store.vault.mergeNotes([...selected]); setSelected(new Set()); openNote(id); }}><Merge size={19} /><span>Merge notes</span></button>}{selectedNotes.every(note => note.trashed) ? <><IconButton label="Restore selected notes" onClick={() => bulk({ trashed: false })}><RotateCcw size={22} /></IconButton><IconButton label="Delete forever" onClick={() => setDeletion({ sourceIds: selectedNotes.flatMap(note => note.sourceIds), titles: selectedNotes.map(note => note.title), emptyTrash: false })}><Trash2 size={22} /></IconButton></> : <><IconButton label="Pin selected notes" onClick={() => bulk({ pinned: true })}><Pin size={21} /></IconButton><IconButton label={view === 'archive' ? 'Unarchive selected notes' : 'Archive selected notes'} onClick={() => bulk({ archived: view !== 'archive' })}><Archive size={21} /></IconButton><IconButton label="Trash selected notes" onClick={() => bulk({ trashed: true })}><Trash2 size={21} /></IconButton></>}</div></> : <>
         <div className="brand-group"><IconButton label={sidebar ? 'Close navigation' : 'Open navigation'} onClick={() => setSidebar(!sidebar)}><Menu size={23} /></IconButton><button className="brand" onClick={() => navigate('notes')} aria-label="Stow home"><span className="brand-mark"><Logo size={26} strokeWidth={2.3} /></span><span>Stow</span></button></div>
         <div className="search-box"><Search size={21} /><input ref={searchRef} type="search" placeholder="Search" aria-label="Search notes" value={search} onChange={e => setSearch(e.target.value)} />{search && <IconButton label="Clear search" onClick={() => setSearch('')}><X size={20} /></IconButton>}</div>
-        <div className="header-actions"><span className={`sync-state sync-${status}`} title={`${syncLabel}${pending ? ` · ${pending} pending changes` : ''}`} role="status" aria-label={syncLabel}>{status === 'online' ? <Cloud size={20} /> : status === 'connecting' ? <LoaderCircle size={19} className="spinning" /> : <CloudOff size={20} />}<span>{status === 'demo' ? 'Demo' : error ? 'Sync issue' : localPending > 0 ? 'Saving…' : status === 'online' ? pending ? 'Syncing…' : imageStatus ? 'Saving images…' : 'Connected' : status === 'connecting' ? 'Connecting…' : status === 'locked' ? 'Locked' : 'Offline'}</span></span><IconButton label="Undo" title={`Undo (${undoShortcut})`} aria-keyshortcuts={macShortcuts ? "Meta+z" : "Control+z"} className="history-button" disabled={!canUndo} onClick={() => undoOrRedo('undo')}><Undo2 size={21} /></IconButton><IconButton label="Redo" title={`Redo (${redoShortcut})`} aria-keyshortcuts={macShortcuts ? "Meta+Shift+z" : "Control+Shift+z Control+y"} className="history-button" disabled={!canRedo} onClick={() => undoOrRedo('redo')}><Redo2 size={21} /></IconButton><IconButton label={listView ? 'Grid view' : 'List view'} className="view-button" onClick={() => setListView(!listView)}>{listView ? <LayoutGrid size={22} /> : <List size={24} />}</IconButton><div className="menu-anchor" ref={settingsRef}><IconButton label="Settings" onClick={() => setSettings(!settings)}><Settings size={22} /></IconButton>{settings && <div className="popup-menu settings-menu"><div className="settings-heading">{user}</div><BuildVersion /><div className="settings-sync"><Cloud size={16} /><span>{syncLabel}{lastSyncAt && <small className="last-sync">Last synced on this device: {new Date(lastSyncAt).toLocaleString()}</small>}{backgroundSync && <small className="last-sync">{backgroundSync === 'native' ? 'Background refresh: Android scheduled' : backgroundSync === 'enabled' ? 'Background refresh: registered; timing controlled by browser' : backgroundSync === 'not-permitted' ? 'Background refresh: not permitted by this browser' : backgroundSync === 'error' ? 'Background refresh could not be enabled' : 'Background refresh: unavailable'}</small>}<BackgroundRefreshDetails /></span></div>{installable && <button type="button" onClick={() => { void installStow().catch(() => notify("Could not open the install prompt. Try installing Stow from your browser menu.")); setSettings(false); }}><DownloadCloud size={18} />Install Stow</button>}{!IS_DEMO && !shellConfig() && <AndroidDownload onDownload={() => setSettings(false)} />}<HistoryMenu onAction={undoOrRedo} onClose={() => setSettings(false)} />{!IS_DEMO && !store.sharedPage && <button onClick={() => { setSettings(false); if (shellConfig()) shellMessage('manage-devices'); else window.open('/device.html', '_blank', 'noopener'); }}><Settings size={18} />Connected Android devices</button>}<button disabled={IS_DEMO || store.sharedPage} title={IS_DEMO ? "The demo does not save notes or history." : undefined} onClick={() => { setSettings(false); setStorageSettings(true); }}><History size={18} />Storage and history</button><button onClick={() => { void store.exportData().catch(error => notify(error instanceof Error ? error.message : 'Could not export the vault.')); setSettings(false); }} disabled={status !== 'online'}><Download size={18} />Download vault backup</button>{status !== 'online' && <button onClick={() => { store.exportCurrentNotes(); setSettings(false); }}><Download size={18} />Export current notes</button>}</div>}</div></div>
+        <div className="header-actions"><span className={`sync-state sync-${status}`} title={`${syncLabel}${pending ? ` · ${pending} pending changes` : ''}`} role="status" aria-label={syncLabel}>{status === 'online' ? <Cloud size={20} /> : status === 'connecting' ? <LoaderCircle size={19} className="spinning" /> : <CloudOff size={20} />}<span>{status === 'demo' ? 'Demo' : error ? 'Sync issue' : localPending > 0 ? 'Saving…' : status === 'online' ? pending ? 'Syncing…' : imageStatus ? 'Saving images…' : 'Connected' : status === 'connecting' ? 'Connecting…' : status === 'locked' ? 'Locked' : 'Offline'}</span></span><IconButton label="Undo" title={`Undo (${undoShortcut})`} aria-keyshortcuts={macShortcuts ? "Meta+z" : "Control+z"} className="history-button" disabled={!canUndo} onClick={() => undoOrRedo('undo')}><Undo2 size={21} /></IconButton><IconButton label="Redo" title={`Redo (${redoShortcut})`} aria-keyshortcuts={macShortcuts ? "Meta+Shift+z" : "Control+Shift+z Control+y"} className="history-button" disabled={!canRedo} onClick={() => undoOrRedo('redo')}><Redo2 size={21} /></IconButton><IconButton label={listView ? 'Grid view' : 'List view'} className="view-button" onClick={() => setListView(!listView)}>{listView ? <LayoutGrid size={22} /> : <List size={24} />}</IconButton><div className="menu-anchor" ref={settingsRef}><IconButton label="Settings" onClick={() => setSettings(!settings)}><Settings size={22} /></IconButton>{settings && <div className="popup-menu settings-menu"><div className="settings-heading">{user}</div><BuildVersion compact /><div className="settings-sync"><Cloud size={16} /><span>{syncLabel}</span></div>{installable && <button type="button" onClick={() => { void installStow().catch(() => notify("Could not open the install prompt. Try installing Stow from your browser menu.")); setSettings(false); }}><DownloadCloud size={18} />Install Stow</button>}{!IS_DEMO && !shellConfig() && <AndroidDownload onDownload={() => setSettings(false)} />}<HistoryMenu onAction={undoOrRedo} onClose={() => setSettings(false)} />{!IS_DEMO && !store.sharedPage && <button onClick={() => { setSettings(false); if (shellConfig()) shellMessage('manage-devices'); else window.open('/device.html', '_blank', 'noopener'); }}><Settings size={18} />Connected Android devices</button>}{!IS_DEMO && <button onClick={() => { setSettings(false); setSyncDiagnostics(true); }}><Cloud size={18} />Sync diagnostics</button>}<button disabled={IS_DEMO || store.sharedPage} title={IS_DEMO ? "The demo does not save notes or history." : undefined} onClick={() => { setSettings(false); setStorageSettings(true); }}><History size={18} />Storage and history</button><button onClick={() => { void store.exportData().catch(error => notify(error instanceof Error ? error.message : 'Could not export the vault.')); setSettings(false); }} disabled={status !== 'online'}><Download size={18} />Download vault backup</button>{status !== 'online' && <button onClick={() => { store.exportCurrentNotes(); setSettings(false); }}><Download size={18} />Export current notes</button>}</div>}</div></div>
       </>}
     </header>
     <>
@@ -498,6 +482,7 @@ export default function App() {
       onShare={setSharingNote} onRestore={id => { setSelectedLabel(null); setView('notes'); setSearch(''); openNote(id); }} />}
     {deletion && <DeleteNotesDialog deletion={deletion} sharedCount={notes.filter(note => note.sharing && deletion.sourceIds.includes(note.id)).length} onDelete={deleteForever} onClose={closeDeletion} />}
     {sharingNote && <ShareNote note={sharingNote} onClose={() => setSharingNote(undefined)} />}
+    {syncDiagnostics && <SyncDiagnostics syncLabel={syncLabel} onClose={() => setSyncDiagnostics(false)} />}
     {storageSettings && <StorageSettings onClose={() => setStorageSettings(false)} />}
     {toast && !syncRejection && <Toast message={toast.message} onDismiss={() => setToast(null)} />}
   </div><ServerNotice /></>;

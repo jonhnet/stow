@@ -1,0 +1,8 @@
+.sync-diagnostics{width:min(540px,calc(100vw - 32px));max-height:calc(100dvh - 32px);padding:0;border:1px solid #dadce0;border-radius:12px;color:#202124;background:#fff;box-shadow:0 8px 32px #0003;overflow:auto}
+.sync-diagnostics::backdrop{background:#20212466}
+.diagnostics-heading{display:flex;align-items:center;justify-content:space-between;gap:16px;padding:12px 16px;border-bottom:1px solid #e8eaed}
+.diagnostics-heading h2{font-size:20px;font-weight:500;margin:0}
+.diagnostics-heading .icon-button{flex-shrink:0}
+.diagnostics-content{padding:4px 16px 16px;font-size:13px;line-height:1.6;overflow-wrap:anywhere}
+.diagnostics-content .text-button{display:flex;align-items:center;gap:10px;margin-left:-12px}
+.diagnostics-error{color:#b3261e}

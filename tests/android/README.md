@@ -52,7 +52,7 @@ delivery. The log explicitly distinguishes the modes and records actual attempt
 and completion times. A standalone shortcut can be insufficient: Chromium on
 Android checks for an installed WebAPK or TWA before granting permission.
 
-On a normally installed app, Settings → **Download background log** provides
+On a normally installed app, Settings → **Sync diagnostics → Download background log** provides
 the persistent event history without ADB or DevTools. Registration records
 include permission and standalone status; `wake` records are emitted only when
 the browser dispatches the worker's periodic event. A `started` event with no

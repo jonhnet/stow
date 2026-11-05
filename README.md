@@ -13,7 +13,7 @@ edits in their original account. A fresh device still needs its initial download
 
 Installed PWAs can refresh notes while closed when the browser grants Periodic
 Background Sync permission. Stow requests opportunities at least an hour apart;
-the browser chooses the actual timing and may not run them. Settings shows
+the browser chooses the actual timing and may not run them. Settings → **Sync diagnostics** shows
 eligibility, the last successful sync, and the background worker’s last attempt,
 success, and error on this device. Registration does not mean a refresh has run. Background refresh
 downloads note content and metadata, preserves pending local edits and Undo, and
@@ -29,7 +29,7 @@ opens cached notes immediately. Android power policy can still defer work. The
 build, account-pairing, proxy setup, and emulator checks are documented in that
 plan.
 
-Settings → **Download background log** exports this device's most recent 200
+Settings → **Sync diagnostics → Download background log** exports this device's most recent 200
 events for the current account: permission/registration checks, browser wake-ups,
 starts, skipped overlaps, failures, and successful downloads (duration and bytes).
 Wake/start records are durable before the work begins, so an interrupted attempt

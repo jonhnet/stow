@@ -28,6 +28,13 @@ test('the installed shell uses its update UI instead of offering an APK download
   await expect(page.getByRole('button', { name: 'Connected Android devices', exact: true })).toBeVisible();
   await expect(page.getByRole('link', { name: 'Get Android app', exact: true })).toHaveCount(0);
   expect(checks).toBe(0);
+  await page.getByRole('button', { name: 'Sync diagnostics', exact: true }).click();
+  await signal(page, { type: 'updates', pending: 'b'.repeat(64) });
+  await signal(page, { type: 'hidden' });
+  expect(await activations(page)).toEqual([]);
+  await expect(page.getByRole('button', { name: 'Restart', exact: true })).toBeDisabled();
+  await page.getByRole('button', { name: 'Close sync diagnostics', exact: true }).click();
+  await expect(page.getByRole('button', { name: 'Settings', exact: true })).toBeFocused();
 });
 
 test('updates wait for editor, composition, pointer, selection and modal to finish; restart saves and restores the filtered view', async ({ page, context }) => {

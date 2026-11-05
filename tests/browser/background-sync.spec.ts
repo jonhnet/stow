@@ -65,6 +65,8 @@ test('periodic sync fetches a remote note with every Stow window closed, then op
     await expect(offline.getByRole('article', { name: 'Open note: Background flight plan', exact: true })).toContainText('Ready before departure');
     await expect(offline.locator('.sync-state')).toHaveAttribute('title', 'Offline — notes stored on this device');
     await offline.getByRole('button', { name: 'Settings', exact: true }).click();
+    await expect(offline.getByText(/Last synced on this device:/)).toHaveCount(0);
+    await offline.getByRole('button', { name: 'Sync diagnostics', exact: true }).click();
     await expect(offline.getByText(/Last synced on this device:/)).toBeVisible();
     const downloaded = offline.waitForEvent('download');
     await offline.getByRole('button', { name: 'Download background log', exact: true }).click();
@@ -134,16 +136,30 @@ test('devices automatically upload, retry a lost acknowledgment without duplicat
   } finally { await a.close(); await b.close(); }
 });
 
-test('settings distinguishes background registration from attempts, failures, and success', async ({ browser }, info) => {
+test('sync diagnostics keeps background status out of Settings and preserves readable failures and log export', async ({ browser }, info) => {
   const context = await browser.newContext();
   try {
     await context.addCookies([{ name: 'stow_test_user', value: `background-status-${info.testId}`, url: 'http://localhost:4174' }]);
     const page = await context.newPage(); await page.goto('http://localhost:4174');
+    await page.setViewportSize({ width: 390, height: 600 });
     await expect(page.locator('.sync-state')).toHaveAttribute('title', 'Connected');
+    await page.getByRole('searchbox').fill('flight');
     const settings = page.getByRole('button', { name: 'Settings', exact: true });
     await settings.click();
+    await expect(page.getByText(/^Last synced|^Last background|^Background refresh:/)).toHaveCount(0);
+    await expect(page.getByRole('button', { name: 'Download background log', exact: true })).toHaveCount(0);
+    await page.getByRole('button', { name: 'Sync diagnostics', exact: true }).click();
     await expect(page.getByText('Background refresh: no attempts recorded on this device.', { exact: true })).toBeVisible();
-    await settings.click();
+    const dialog = page.getByRole('dialog', { name: 'Sync diagnostics', exact: true });
+    const bounds = (await dialog.boundingBox())!;
+    expect(bounds.x).toBeGreaterThanOrEqual(0);
+    expect(bounds.y).toBeGreaterThanOrEqual(0);
+    expect(bounds.x + bounds.width).toBeLessThanOrEqual(390);
+    expect(bounds.y + bounds.height).toBeLessThanOrEqual(600);
+    await page.keyboard.press('Escape');
+    await expect(dialog).toHaveCount(0);
+    await expect(settings).toBeFocused();
+    await expect(page.getByRole('searchbox')).toHaveValue('flight');
     await page.evaluate(async () => {
       const account = JSON.parse(localStorage.getItem('stow-account-v1')!);
       const request = indexedDB.open('stow-background-v1');
@@ -159,6 +175,7 @@ test('settings distinguishes background registration from attempts, failures, an
     // Foreground sync must not erase the last background failure.
     await page.reload(); await expect(page.locator('.sync-state')).toHaveAttribute('title', 'Connected');
     await settings.click();
+    await page.getByRole('button', { name: 'Sync diagnostics', exact: true }).click();
     await expect(page.getByText(/^Last background attempt:/)).toBeVisible();
     await expect(page.getByText(/^Last background success:/)).toBeVisible();
     await expect(page.getByText('Last background error: Background session rejected (HTTP 401)', { exact: true })).toBeVisible();
