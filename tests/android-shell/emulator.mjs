@@ -342,9 +342,13 @@ try {
     network(false);
     // Reboot is different from killing a process: registrations must be restored
     // by the boot receiver, and an offline launch must still read the cache.
+    const previousBoot = adb('shell', 'cat', '/proc/sys/kernel/random/boot_id');
     await android.close(); android = undefined; adb('reboot');
+    // Don't let wait-for-device observe the connection that is shutting down.
+    adb('wait-for-disconnect');
     adb('wait-for-device');
     await expect.poll(() => adb('shell', 'getprop', 'sys.boot_completed'), { timeout: 120000, intervals: [1000] }).toBe('1');
+    expect(adb('shell', 'cat', '/proc/sys/kernel/random/boot_id')).not.toBe(previousBoot);
     adb('root'); adb('wait-for-device');
     adb('shell', 'input', 'keyevent', 'KEYCODE_WAKEUP'); adb('shell', 'wm', 'dismiss-keyguard');
     // ADB reverse is gone across reboot; assert unreachable before the launch.

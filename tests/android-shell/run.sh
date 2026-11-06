@@ -2,6 +2,8 @@
 set -eu
 source_dir=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)
 cd "$source_dir"
+STOW_SOURCE_DIR="$source_dir"
+. "$STOW_SOURCE_DIR/scripts/environment.sh"
 serial=${1:?Supply an isolated emulator serial}
 case "$serial" in emulator-[0-9]*) ;; *) printf '%s\n' 'Refusing to clear a physical device.' >&2; exit 1 ;; esac
 build_dir="$source_dir/../build/android-shell"
