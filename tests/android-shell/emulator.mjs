@@ -39,7 +39,7 @@ function network(online) {
   }
   record(online ? 'network-online' : 'network-offline');
 }
-    async function nativeButton(label) {
+    async function nativeButton(label, { x = .5, y = .5 } = {}) {
       let hit;
       await expect.poll(() => {
         adb('shell', 'uiautomator', 'dump', '/sdcard/stow-test-window.xml');
@@ -49,7 +49,7 @@ function network(online) {
         return !!hit;
       }, { timeout: 20000 }).toBeTruthy();
       const bounds = hit.match(/bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"/).slice(1).map(Number);
-      adb('shell', 'input', 'tap', String(Math.floor((bounds[0] + bounds[2]) / 2)), String(Math.floor((bounds[1] + bounds[3]) / 2)));
+      adb('shell', 'input', 'tap', String(Math.floor(bounds[0] + (bounds[2] - bounds[0]) * x)), String(Math.floor(bounds[1] + (bounds[3] - bounds[1]) * y)));
     }
 let remote, android;
 // These Google companion apps launch Play-services repair activities or
@@ -406,7 +406,9 @@ try {
     uploaded.catch(() => {}); // Preserve the native UI failure if it precedes the request.
     await page.getByRole('button', { name: 'Add image', exact: true }).click();
     await nativeButton('More'); await nativeButton('Browse…');
-    await nativeButton(imageName);
+    // A small file tile's center overlaps its top-right Preview button. Select
+    // the file itself below that button so GET_CONTENT returns to Stow.
+    await nativeButton(imageName, { x: .25, y: .75 });
     expect((await uploaded).status()).toBe(204);
     await expect(page.getByRole('dialog', { name: 'Edit note', exact: true }).getByRole('img', { name: imageName, exact: true })).toBeVisible();
     await page.getByRole('button', { name: `Open original: ${imageName}`, exact: true }).click();
@@ -454,10 +456,12 @@ try {
     for (let i = 0; i < 16; i++) await addNote(page, `Scroll after viewing image ${i}`);
     expect(await page.evaluate(() => document.documentElement.scrollHeight)).toBeGreaterThan(await page.evaluate(() => innerHeight));
     const scrollStart = await page.evaluate(() => scrollY);
-    await touch('touchStart', [{ id: 4, x: 100, y: 600 }]);
-    for (const y of [550, 500, 450, 400, 350]) await touch('touchMove', [{ id: 4, x: 100, y }]);
+    // CI's default emulator has a 592px WebView; a fixed y=600 starts outside it.
+    const swipe = await page.evaluate(() => ({ x: innerWidth / 3, y: innerHeight * .8, distance: innerHeight * .35 }));
+    await touch('touchStart', [{ id: 4, x: swipe.x, y: swipe.y }]);
+    for (let step = 1; step <= 5; step++) await touch('touchMove', [{ id: 4, x: swipe.x, y: swipe.y - swipe.distance * step / 5 }]);
     await touch('touchEnd', []);
-    await expect.poll(() => page.evaluate(() => scrollY)).toBeGreaterThan(scrollStart + 100);
+    await expect.poll(() => page.evaluate(() => scrollY)).toBeGreaterThan(scrollStart + swipe.distance / 2);
     record('native-back-from-image-and-archive-restore-overview-taps-and-scroll');
     adb('shell', 'rm', `/sdcard/Download/${imageName}`);
     record('native-file-picker-uploaded-image');
