@@ -5,6 +5,7 @@ import { store, useStow } from './core/store';
 import { isImageAttachment } from './core/images';
 import type { Attachment } from './core/types';
 import ZoomableImage from './ZoomableImage';
+import { useBodyScrollLock } from './useBodyScrollLock';
 
 type Lease = { url: string; release: () => void };
 
@@ -19,11 +20,11 @@ function OriginalAttachment({ attachment, onClose }: { attachment: Attachment; o
   const [message, setMessage] = useState<string>();
   const [attempt, setAttempt] = useState(0);
   const dialog = useRef<HTMLDivElement>(null);
+  useBodyScrollLock();
   useEffect(() => {
     const previous = document.activeElement as HTMLElement;
-    const overflow = document.body.style.overflow; document.body.style.overflow = 'hidden';
     dialog.current?.querySelector<HTMLButtonElement>('button')?.focus();
-    return () => { document.body.style.overflow = overflow; if (previous?.isConnected) previous.focus(); };
+    return () => { if (previous?.isConnected) previous.focus(); };
   }, []);
   useEffect(() => {
     let live = true;

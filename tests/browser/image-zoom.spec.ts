@@ -1,4 +1,5 @@
 import { test, expect, type CDPSession, type Page } from '@playwright/test';
+import { createNote } from './support/sync-faults';
 
 const origin = 'http://localhost:4174';
 test.use({ hasTouch: true, viewport: { width: 390, height: 844 } });
@@ -75,6 +76,11 @@ test('trusted two-finger input zooms the original around the fingers, then pans 
   await viewer.getByRole('button', { name: 'Close image' }).click();
   await expect(page.getByRole('dialog', { name: 'Edit note', exact: true })).toBeVisible();
   await expect(page.getByRole('button', { name: 'Open original: barcode.png' })).toBeFocused();
+  // Closing only the image must leave the note's own scroll lock intact.
+  expect(await page.evaluate(() => document.body.style.overflow)).toBe('hidden');
+  await page.getByRole('button', { name: 'Close', exact: true }).click();
+  await expect(page.getByRole('dialog')).toHaveCount(0);
+  await expect.poll(() => page.evaluate(() => document.body.style.overflow)).toBe('');
 });
 
 test('zoom controls, mouse panning, rotation, focus, and offline reopening retain a usable viewer', async ({ page, context }) => {
@@ -114,4 +120,32 @@ test('zoom controls, mouse panning, rotation, focus, and offline reopening retai
   await expect(viewer.getByRole('button', { name: 'Close image' })).toBeFocused();
   await page.keyboard.press('Tab');
   await expect(viewport).toBeFocused();
+});
+
+test('leaving an image with Back, then archiving its note, releases the overview', async ({ page, context, browserName }) => {
+  await openImage(page);
+  await page.goBack();
+  await expect(page.getByRole('dialog')).toHaveCount(0);
+  await expect.poll(() => page.evaluate(() => document.body.style.overflow)).toBe('');
+  await page.getByRole('button', { name: 'Settings', exact: true }).tap();
+  await expect(page.locator('.settings-menu')).toBeVisible();
+  await page.getByRole('button', { name: 'Settings', exact: true }).tap();
+  await page.getByRole('article', { name: 'Open note: Return barcode', exact: true }).tap();
+  const editor = page.getByRole('dialog', { name: 'Edit note', exact: true });
+  await expect(editor).toBeVisible();
+  await editor.getByRole('button', { name: 'Archive note', exact: true }).tap();
+  await expect(page.getByRole('dialog')).toHaveCount(0);
+  await expect(page.getByRole('article', { name: 'Open note: Return barcode', exact: true })).toHaveCount(0);
+  await expect.poll(() => page.evaluate(() => document.body.style.overflow)).toBe('');
+  for (let i = 0; i < 10; i++) await createNote(page, `Scroll past ${i}`, 'Enough text for a scrolling collection.\n'.repeat(8));
+  expect(await page.evaluate(() => document.documentElement.scrollHeight)).toBeGreaterThan(1000);
+  if (browserName === 'chromium') {
+    const session = await context.newCDPSession(page);
+    await touch(session, 'touchStart', [{ id: 1, x: 100, y: 650 }]);
+    for (const y of [600, 550, 500, 450, 400]) await touch(session, 'touchMove', [{ id: 1, x: 100, y }]);
+    await touch(session, 'touchEnd', []);
+  } else await page.mouse.wheel(0, 300);
+  await expect.poll(() => page.evaluate(() => window.scrollY)).toBeGreaterThan(100);
+  await page.getByRole('article', { name: 'Open note: Scroll past 8', exact: true }).tap();
+  await expect(editor).toBeVisible();
 });

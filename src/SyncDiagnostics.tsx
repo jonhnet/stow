@@ -3,6 +3,7 @@ import { Download, X } from 'lucide-react';
 import { store, useStow } from './core/store';
 import type { BackgroundResult } from './core/background-state';
 import BuildVersion from './BuildVersion';
+import { useBodyScrollLock } from './useBodyScrollLock';
 import './syncDiagnostics.css';
 
 export default function SyncDiagnostics({ syncLabel, onClose }: { syncLabel: string; onClose(): void }) {
@@ -11,14 +12,14 @@ export default function SyncDiagnostics({ syncLabel, onClose }: { syncLabel: str
   const { lastSyncAt, backgroundSync } = useStow();
   const [result, setResult] = useState<BackgroundResult | null>();
   const [error, setError] = useState<string>();
+  useBodyScrollLock();
   useEffect(() => {
     const element = dialog.current!;
-    const overflow = document.body.style.overflow; document.body.style.overflow = 'hidden';
     element.showModal(); closeButton.current!.focus();
     let active = true;
     void store.getBackgroundResult().then(value => { if (active) setResult(value); }, () => { if (active) setError('Could not read background refresh diagnostics.'); });
     return () => {
-      active = false; element.close(); document.body.style.overflow = overflow;
+      active = false; element.close();
       document.querySelector<HTMLElement>('[aria-label="Settings"]')?.focus({ preventScroll: true });
     };
   }, []);

@@ -378,14 +378,18 @@ try {
     await page.getByRole('article', { name: 'Open note: After explicit force stop' }).click();
     expect(await page.evaluate(() => document.activeElement.tagName)).not.toBe('TEXTAREA');
     const beforeKeyboard = await page.evaluate(() => innerHeight);
-    const bodyBox = await page.getByRole('textbox', { name: 'Note text', exact: true }).boundingBox();
     const scale = await page.evaluate(() => devicePixelRatio);
-    adb('shell', 'input', 'tap', String(Math.floor(webviewBounds[0] + (bodyBox.x + bodyBox.width / 2) * scale)), String(Math.floor(webviewBounds[1] + (bodyBox.y + bodyBox.height / 2) * scale)));
+    const tapWeb = async locator => {
+      await expect(locator).toBeInViewport();
+      const box = await locator.boundingBox();
+      adb('shell', 'input', 'tap', String(Math.floor(webviewBounds[0] + (box.x + box.width / 2) * scale)), String(Math.floor(webviewBounds[1] + (box.y + box.height / 2) * scale)));
+    };
+    await tapWeb(page.getByRole('textbox', { name: 'Note text', exact: true }));
     await expect.poll(() => page.evaluate(() => innerHeight), { timeout: 10000 }).toBeLessThan(beforeKeyboard - 100);
     await expect.poll(() => adb('shell', 'dumpsys', 'input_method').includes('mInputShown=true'), { timeout: 10000 }).toBeTruthy();
     const toolbar = await page.locator('.editor-toolbar').boundingBox();
     expect(toolbar.y + toolbar.height).toBeLessThanOrEqual(await page.evaluate(() => innerHeight) + 1);
-    writeFileSync(path.join(trial, 'keyboard.png'), execFileSync('adb', ['-s', values.serial, 'exec-out', 'screencap', '-p']));
+    writeFileSync(path.join(trial, 'keyboard.png'), execFileSync('adb', ['-s', values.serial, 'exec-out', 'screencap', '-p'], { maxBuffer: 16 * 1024 * 1024 }));
     await page.getByRole('button', { name: 'Close', exact: true }).click();
     record('native-bars-and-keyboard-leave-editor-visible');
 
@@ -426,22 +430,46 @@ try {
     await touch('touchEnd', []);
     await expect.poll(async () => (await originalImage.boundingBox()).x - enlarged.x).toBeCloseTo(-40, 0);
     expect(await page.evaluate(() => visualViewport.scale)).toBe(1);
-    writeFileSync(path.join(trial, 'image-zoom.png'), execFileSync('adb', ['-s', values.serial, 'exec-out', 'screencap', '-p']));
+    writeFileSync(path.join(trial, 'image-zoom.png'), execFileSync('adb', ['-s', values.serial, 'exec-out', 'screencap', '-p'], { maxBuffer: 16 * 1024 * 1024 }));
     await imageViewer.getByRole('button', { name: 'Fit image' }).click();
     await expect(imageViewer.getByRole('button', { name: 'Fit image' })).toHaveText('100%');
     await imageViewer.getByRole('button', { name: 'Close image' }).click();
     record('native-original-image-pinched-and-panned');
-    await page.getByRole('button', { name: 'Close', exact: true }).click();
+    expect(await page.evaluate(() => document.body.style.overflow)).toBe('hidden');
+    await page.getByRole('button', { name: `Open original: ${imageName}`, exact: true }).click();
+    await expect(imageViewer).toBeVisible();
+    // Android Back closes the note's history entry, unmounting both dialogs.
+    adb('shell', 'input', 'keyevent', 'KEYCODE_BACK');
+    await expect(page.getByRole('dialog')).toHaveCount(0);
+    await expect.poll(() => page.evaluate(() => document.body.style.overflow)).toBe('');
+    await tapWeb(page.getByRole('button', { name: 'Settings', exact: true }));
+    await expect(page.locator('.settings-menu')).toBeVisible();
+    await tapWeb(page.getByRole('button', { name: 'Settings', exact: true }));
+    await tapWeb(page.getByRole('article', { name: 'Open note: After explicit force stop' }));
+    const reopened = page.getByRole('dialog', { name: 'Edit note', exact: true });
+    await expect(reopened).toBeVisible();
+    await tapWeb(reopened.getByRole('button', { name: 'Archive note', exact: true }));
+    await expect(page.getByRole('dialog')).toHaveCount(0);
+    await expect(page.getByRole('article', { name: 'Open note: After explicit force stop' })).toHaveCount(0);
+    for (let i = 0; i < 16; i++) await addNote(page, `Scroll after viewing image ${i}`);
+    expect(await page.evaluate(() => document.documentElement.scrollHeight)).toBeGreaterThan(await page.evaluate(() => innerHeight));
+    const scrollStart = await page.evaluate(() => scrollY);
+    await touch('touchStart', [{ id: 4, x: 100, y: 600 }]);
+    for (const y of [550, 500, 450, 400, 350]) await touch('touchMove', [{ id: 4, x: 100, y }]);
+    await touch('touchEnd', []);
+    await expect.poll(() => page.evaluate(() => scrollY)).toBeGreaterThan(scrollStart + 100);
+    record('native-back-from-image-and-archive-restore-overview-taps-and-scroll');
     adb('shell', 'rm', `/sdcard/Download/${imageName}`);
     record('native-file-picker-uploaded-image');
 
-    writeFileSync(path.join(trial, 'overview.png'), execFileSync('adb', ['-s', values.serial, 'exec-out', 'screencap', '-p']));
+    writeFileSync(path.join(trial, 'overview.png'), execFileSync('adb', ['-s', values.serial, 'exec-out', 'screencap', '-p'], { maxBuffer: 16 * 1024 * 1024 }));
   }
   report.passed = true;
 } catch (error) {
-  writeFileSync(path.join(trial, 'failure.png'), execFileSync('adb', ['-s', values.serial, 'exec-out', 'screencap', '-p']));
+  record('FAILED', { error: String(error), stack: error.stack });
+  writeFileSync(path.join(trial, 'failure.png'), execFileSync('adb', ['-s', values.serial, 'exec-out', 'screencap', '-p'], { maxBuffer: 16 * 1024 * 1024 }));
   writeFileSync(path.join(trial, 'activity-log.txt'), adb('logcat', '-d', '-s', 'ActivityTaskManager:I'));
-  record('FAILED', { error: String(error), stack: error.stack }); throw error;
+  throw error;
 }
 finally {
   for (const name of disabledPackages) adb('shell', 'pm', 'enable', name);

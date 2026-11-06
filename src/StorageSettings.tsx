@@ -1,4 +1,5 @@
 import { useEffect, useId, useRef, useState } from 'react';
+import { useBodyScrollLock } from './useBodyScrollLock';
 import { LoaderCircle, RefreshCw, X } from 'lucide-react';
 import { store } from './core/store';
 import type { VaultStorage } from './core/storage-types';
@@ -61,9 +62,9 @@ export default function StorageSettings({ onClose }: { onClose: () => void }) {
   const [confirmation, setConfirmation] = useState<Confirmation>();
   const [protectedStorage, setProtectedStorage] = useState<boolean>();
   const [requestingProtection, setRequestingProtection] = useState(false);
+  useBodyScrollLock();
   useEffect(() => {
     const element = dialog.current!;
-    const overflow = document.body.style.overflow; document.body.style.overflow = 'hidden';
     element.showModal(); closeButton.current!.focus();
     let active = true;
     void navigator.storage.persisted().then(value => { if (active) setProtectedStorage(value); }).catch(() => {});
@@ -71,7 +72,7 @@ export default function StorageSettings({ onClose }: { onClose: () => void }) {
       .catch(error => { if (active) setError(error instanceof Error ? error.message : 'Could not load storage information.'); })
       .finally(() => { if (active) setBusy(false); });
     return () => {
-      active = false; element.close(); document.body.style.overflow = overflow;
+      active = false; element.close();
       document.querySelector<HTMLElement>('[aria-label="Settings"]')?.focus({ preventScroll: true });
     };
   }, []);

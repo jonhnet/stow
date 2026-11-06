@@ -16,6 +16,7 @@ import EditorChecklist from './EditorChecklist';
 import { useEditBoundaries } from './useEditBoundaries';
 import { useDismissiblePopup } from './useDismissiblePopup';
 import { useEditorViewport } from './useEditorViewport';
+import { useBodyScrollLock } from './useBodyScrollLock';
 import { useEditorNavigation, type NewNote } from './useEditorNavigation';
 import Logo from './Logo';
 import Markdown from './Markdown';
@@ -181,6 +182,7 @@ function NoteEditor({ note: savedNote, initial, onCreated, labels, onClose: clos
   });
   const backdrop = useRef<HTMLDivElement>(null);
   useEditorViewport(backdrop, dialog);
+  useBodyScrollLock();
   const boundaries = useEditBoundaries(dialog, onUndoRedo);
   const onClose = () => boundaries.close(closeNote);
   const fileRef = useRef<HTMLInputElement>(null);
@@ -195,7 +197,6 @@ function NoteEditor({ note: savedNote, initial, onCreated, labels, onClose: clos
     // Mouse clicks leave a card focused too. Return those to the overview;
     // keyboard users should retain their place in the card navigation order.
     const pointerOpenedCard = previous?.closest('.note-card') && !previous.matches(':focus-visible');
-    const overflow = document.body.style.overflow; document.body.style.overflow = 'hidden';
     // Opening a saved note is a reading action. Only an explicit tap on a field
     // should raise the phone keyboard; new-note launchers still go straight to typing.
     const initialField = initial
@@ -203,7 +204,6 @@ function NoteEditor({ note: savedNote, initial, onCreated, labels, onClose: clos
       : undefined;
     if (!dialog.current?.contains(document.activeElement)) (initialField ?? dialog.current)?.focus({ preventScroll: true });
     return () => {
-      document.body.style.overflow = overflow;
       const target = pointerOpenedCard ? document.querySelector<HTMLElement>('.main-content')
         : previous?.isConnected ? previous : document.querySelector<HTMLInputElement>('[aria-label="Search notes"]');
       target?.focus({ preventScroll: true });
