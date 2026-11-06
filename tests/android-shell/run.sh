@@ -19,5 +19,5 @@ adb -s "$serial" shell am force-stop net.stowapp.android
 adb -s "$serial" shell am instrument -w net.stowapp.android.test/androidx.test.runner.AndroidJUnitRunner > "$build_dir/logs/instrumentation.log"
 cat "$build_dir/logs/instrumentation.log"
 # Android's shell exits zero even when instrumentation tests fail.
-rg -q 'OK \([0-9]+ tests\)' "$build_dir/logs/instrumentation.log"
+grep -Eq 'OK \([0-9]+ tests\)' "$build_dir/logs/instrumentation.log"
 node tests/android-shell/emulator.mjs --serial "$serial"
