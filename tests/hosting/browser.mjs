@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { mkdirSync } from 'node:fs';
+import { mkdirSync, readFileSync } from 'node:fs';
 import { chromium } from 'playwright-core';
 
 const origin = process.env.STOW_TEST_ORIGIN;
@@ -19,6 +19,13 @@ const browserOptions = {
   args: ['--no-sandbox', '--disable-dev-shm-usage'],
   viewport: { width: 390, height: 844 },
 };
+// A new bridge interface still performs IPv6 Duplicate Address Detection.
+// Completing it changes the address list and makes Chromium abort in-flight
+// HTTP/2 requests with ERR_NETWORK_CHANGED. Start Chrome after that transition,
+// rather than racing it or retrying a partially loaded application.
+await waitFor(() => readFileSync('/proc/net/if_inet6', 'utf8').trim().split('\n').filter(Boolean)
+  .every(line => !(parseInt(line.trim().split(/\s+/)[4], 16) & 0x40)), // IFA_F_TENTATIVE
+  'Container IPv6 addresses remained tentative before browser startup');
 const context = await chromium.launchPersistentContext('/profile', browserOptions);
 context.setDefaultTimeout(15000);
 const page = await context.newPage();
